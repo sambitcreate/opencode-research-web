@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertCircle,
@@ -40,6 +40,7 @@ type OpenCodeSessionSummary = {
   title: string;
   directory: string | null;
   version: string | null;
+  parentId?: string | null;
   createdAt: string | null;
   updatedAt: string | null;
   additions: number;
@@ -76,6 +77,45 @@ type OpenCodeSessionDetail = {
   messageCount: number;
   latestMessageAt: string | null;
   activeToolCalls: number;
+  todo?: unknown;
+  diff?: unknown;
+  children?: OpenCodeSessionSummary[];
+};
+
+type OpenCodeSessionTimelineEntry = {
+  messageId: string;
+  createdAt: string | null;
+  preview: string;
+  assistantMessageId: string | null;
+  assistantState: 'running' | 'complete' | 'none';
+  hasDiffMarker: boolean;
+};
+
+type OpenCodeSessionTimeline = {
+  running: boolean;
+  host: string;
+  port: number;
+  started: boolean;
+  sessionId: string;
+  count: number;
+  entries: OpenCodeSessionTimelineEntry[];
+};
+
+type OpenCodeSessionTranscript = {
+  running: boolean;
+  host: string;
+  port: number;
+  started: boolean;
+  sessionId: string;
+  title: string;
+  generatedAt: string;
+  messageCount: number;
+  options: {
+    thinking: boolean;
+    toolDetails: boolean;
+    assistantMetadata: boolean;
+  };
+  markdown: string;
 };
 
 type OpenCodeHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -116,6 +156,19 @@ type OpenCodeControlResponse = {
   contentType: string;
   data: unknown;
   text: string;
+};
+
+type EventConnectionState = 'connecting' | 'connected' | 'error';
+
+type OpenCodeDebugEvent = {
+  id: string;
+  streamEvent: string;
+  source: 'instance' | 'global' | 'bridge';
+  seq: number | null;
+  eventType: string;
+  sessionId: string | null;
+  timestamp: string;
+  payload: unknown;
 };
 
 type ColorScheme = 'system' | 'light' | 'dark';
@@ -183,6 +236,11 @@ type SessionOperationDefinition = {
 const EMPTY_SESSIONS: OpenCodeSessionSummary[] = [];
 const EMPTY_OPENAPI_ENDPOINTS: OpenCodeEndpointDefinition[] = [];
 const DEFAULT_API_METHODS: OpenCodeHttpMethod[] = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'];
+const DEBUG_EVENT_LIMIT = 120;
+const MONITOR_POLL_MS_DISCONNECTED = 12_000;
+const MONITOR_POLL_MS_CONNECTED = 45_000;
+const SESSION_POLL_MS_DISCONNECTED = 9_000;
+const SESSION_POLL_MS_CONNECTED = 30_000;
 
 const SHADOW_DARK =
   '0 0 0 1px rgba(252,251,251,0.16), 0 1px 2px -1px rgba(0,0,0,0.26), 0 1px 2px 0 rgba(0,0,0,0.22), 0 2px 6px 0 rgba(0,0,0,0.18)';
@@ -719,6 +777,120 @@ function extractIdentifier(value: unknown): string | null {
   return extractString(nested, ['requestID', 'id', 'sessionID']);
 }
 
+function parseEventJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function findSessionId(value: unknown, depth = 0): string | null {
+  if (depth > 4) return null;
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const direct = extractString(record, ['sessionId', 'sessionID', 'session_id', 'id', 'session']);
+  if (direct && direct.startsWith('ses_')) return direct;
+
+  for (const nested of Object.values(record)) {
+    if (!nested || typeof nested !== 'object') continue;
+    const found = findSessionId(nested, depth + 1);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+function extractNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function summarizeTodoItems(value: unknown): { total: number; done: number; open: number } {
+  const stack: unknown[] = Array.isArray(value) ? value : [value];
+  let total = 0;
+  let done = 0;
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) continue;
+
+    if (Array.isArray(current)) {
+      for (const entry of current) stack.push(entry);
+      continue;
+    }
+
+    const record = asRecord(current);
+    if (!record) continue;
+
+    const looksLikeTodo =
+      typeof record.title === 'string' ||
+      typeof record.text === 'string' ||
+      typeof record.content === 'string' ||
+      typeof record.status === 'string' ||
+      typeof record.done === 'boolean';
+
+    if (looksLikeTodo) {
+      total += 1;
+      const status = typeof record.status === 'string' ? record.status.toLowerCase() : '';
+      const state = typeof record.state === 'string' ? record.state.toLowerCase() : '';
+      const completed =
+        record.done === true ||
+        status === 'done' ||
+        status === 'completed' ||
+        status === 'complete' ||
+        state === 'done' ||
+        state === 'completed' ||
+        state === 'complete';
+      if (completed) done += 1;
+    }
+
+    for (const nested of Object.values(record)) {
+      if (nested && typeof nested === 'object') {
+        stack.push(nested);
+      }
+    }
+  }
+
+  return {
+    total,
+    done,
+    open: Math.max(0, total - done)
+  };
+}
+
+function summarizeDiff(value: unknown): { files: number | null; additions: number | null; deletions: number | null } {
+  const record = asRecord(value);
+  if (!record) {
+    return { files: null, additions: null, deletions: null };
+  }
+
+  const summary = asRecord(record.summary) ?? record;
+  const files = extractNumber(summary.files ?? summary.filesChanged ?? summary.fileCount);
+  const additions = extractNumber(summary.additions ?? summary.added ?? summary.insertions);
+  const deletions = extractNumber(summary.deletions ?? summary.removed ?? summary.removals);
+
+  return { files, additions, deletions };
+}
+
+function summarizeSessionUsage(value: unknown): { context: number | null; cost: number | null } {
+  const record = asRecord(value);
+  if (!record) return { context: null, cost: null };
+
+  const context =
+    extractNumber(record.contextTokens) ??
+    extractNumber(record.context) ??
+    extractNumber(record.promptTokens) ??
+    extractNumber(record.tokens);
+  const cost = extractNumber(record.costUsd) ?? extractNumber(record.cost) ?? extractNumber(record.estimatedCostUsd);
+  return { context, cost };
+}
+
 function resolveSessionPath(templatePath: string, sessionId: string): string {
   return templatePath.replaceAll('{sessionID}', encodeURIComponent(sessionId));
 }
@@ -810,10 +982,13 @@ export default function OpenCodeMonitorPage() {
   const [isMonitorLoading, setIsMonitorLoading] = useState(false);
 
   const [sessionDetail, setSessionDetail] = useState<OpenCodeSessionDetail | null>(null);
+  const [sessionTimeline, setSessionTimeline] = useState<OpenCodeSessionTimeline | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isSessionDetailLoading, setIsSessionDetailLoading] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [sessionSearch, setSessionSearch] = useState('');
+  const [isTimelineLoading, setIsTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
 
   const [newSessionTitle, setNewSessionTitle] = useState('');
   const [newSessionParent, setNewSessionParent] = useState('');
@@ -840,6 +1015,16 @@ export default function OpenCodeMonitorPage() {
   const [themeId, setThemeId] = useState<string>('oc-1');
   const [colorScheme, setColorScheme] = useState<ColorScheme>('system');
   const [systemPrefersDark, setSystemPrefersDark] = useState(true);
+  const [eventConnectionState, setEventConnectionState] = useState<EventConnectionState>('connecting');
+  const [eventConnectionError, setEventConnectionError] = useState<string | null>(null);
+  const [eventDebugFilter, setEventDebugFilter] = useState<'all' | 'instance' | 'global' | 'bridge'>('all');
+  const [eventDebugEvents, setEventDebugEvents] = useState<OpenCodeDebugEvent[]>([]);
+  const [isTranscriptRunning, setIsTranscriptRunning] = useState(false);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
+
+  const activeSessionIdRef = useRef<string | null>(null);
+  const refreshMonitorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshSessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const callControl = useCallback(
     async (input: {
@@ -915,7 +1100,7 @@ export default function OpenCodeMonitorPage() {
 
     try {
       const response = await fetch(
-        `/api/opencode/sessions?sessionId=${encodeURIComponent(sessionId)}&messageLimit=160`,
+        `/api/opencode/sessions?sessionId=${encodeURIComponent(sessionId)}&messageLimit=160&include=messages,todo,diff,children`,
         {
           cache: 'no-store'
         }
@@ -932,6 +1117,59 @@ export default function OpenCodeMonitorPage() {
       if (!options?.silent) setIsSessionDetailLoading(false);
     }
   }, []);
+
+  const refreshSessionTimeline = useCallback(async (sessionId: string, options?: { silent?: boolean }) => {
+    if (!sessionId) return;
+    if (!options?.silent) setIsTimelineLoading(true);
+
+    try {
+      const response = await fetch(`/api/opencode/session/${encodeURIComponent(sessionId)}/timeline`, {
+        cache: 'no-store'
+      });
+      const payload = (await response.json()) as OpenCodeSessionTimeline | { error?: string };
+      if (!response.ok) {
+        throw new Error((payload as { error?: string }).error || `Failed to load session timeline for ${sessionId}.`);
+      }
+      setSessionTimeline(payload as OpenCodeSessionTimeline);
+      setTimelineError(null);
+    } catch (error) {
+      setTimelineError(error instanceof Error ? error.message : 'Unable to load timeline.');
+    } finally {
+      if (!options?.silent) setIsTimelineLoading(false);
+    }
+  }, []);
+
+  const pushDebugEvent = useCallback((event: Omit<OpenCodeDebugEvent, 'id' | 'timestamp'>) => {
+    const timestamp = new Date().toISOString();
+    const id = `${timestamp}-${Math.random().toString(36).slice(2, 8)}`;
+    setEventDebugEvents((current) => {
+      const next = [{ ...event, id, timestamp }, ...current];
+      return next.slice(0, DEBUG_EVENT_LIMIT);
+    });
+  }, []);
+
+  const scheduleMonitorRefreshFromEvent = useCallback(
+    (payload: unknown) => {
+      if (refreshMonitorTimerRef.current) return;
+      refreshMonitorTimerRef.current = setTimeout(() => {
+        refreshMonitorTimerRef.current = null;
+        void refreshMonitor({ silent: true });
+      }, 550);
+
+      const targetSessionId = findSessionId(payload) || activeSessionIdRef.current;
+      if (!targetSessionId) return;
+
+      if (refreshSessionTimerRef.current) {
+        clearTimeout(refreshSessionTimerRef.current);
+      }
+      refreshSessionTimerRef.current = setTimeout(() => {
+        refreshSessionTimerRef.current = null;
+        void refreshSessionDetail(targetSessionId, { silent: true });
+        void refreshSessionTimeline(targetSessionId, { silent: true });
+      }, 700);
+    },
+    [refreshMonitor, refreshSessionDetail, refreshSessionTimeline]
+  );
 
   useEffect(() => {
     const savedTheme = window.localStorage.getItem('opencode-ui-theme');
@@ -962,24 +1200,163 @@ export default function OpenCodeMonitorPage() {
   }, []);
 
   useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    let disposed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let source: EventSource | null = null;
+
+    const clearReconnect = () => {
+      if (!reconnectTimer) return;
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    };
+
+    const connect = () => {
+      if (disposed) return;
+      setEventConnectionState('connecting');
+      setEventConnectionError(null);
+
+      source = new EventSource('/api/opencode/events?scope=both&autostart=0');
+
+      source.addEventListener('ready', (event) => {
+        const payload = parseEventJson(event.data);
+        setEventConnectionState('connected');
+        pushDebugEvent({
+          streamEvent: 'ready',
+          source: 'bridge',
+          seq: null,
+          eventType: 'ready',
+          sessionId: null,
+          payload
+        });
+      });
+
+      source.addEventListener('source_open', (event) => {
+        const payload = parseEventJson(event.data);
+        const record = asRecord(payload);
+        const sourceLabel = extractString(record || {}, ['source']) as 'instance' | 'global' | null;
+        pushDebugEvent({
+          streamEvent: 'source_open',
+          source: sourceLabel === 'global' ? 'global' : sourceLabel === 'instance' ? 'instance' : 'bridge',
+          seq: null,
+          eventType: 'source_open',
+          sessionId: null,
+          payload
+        });
+      });
+
+      source.addEventListener('event', (event) => {
+        const payload = parseEventJson(event.data);
+        const record = asRecord(payload);
+        const sourceLabel = extractString(record || {}, ['source']) as 'instance' | 'global' | null;
+        const seqRaw = record ? record.seq : null;
+        const seq = typeof seqRaw === 'number' && Number.isFinite(seqRaw) ? seqRaw : null;
+        const eventType = (extractString(record || {}, ['event']) || 'message').toLowerCase();
+        const nestedPayload = record?.data ?? payload;
+
+        pushDebugEvent({
+          streamEvent: 'event',
+          source: sourceLabel === 'global' ? 'global' : sourceLabel === 'instance' ? 'instance' : 'bridge',
+          seq,
+          eventType,
+          sessionId: findSessionId(nestedPayload),
+          payload: nestedPayload
+        });
+
+        scheduleMonitorRefreshFromEvent(nestedPayload);
+      });
+
+      source.addEventListener('source_error', (event) => {
+        const payload = parseEventJson(event.data);
+        const record = asRecord(payload);
+        const sourceLabel = extractString(record || {}, ['source']) as 'instance' | 'global' | null;
+        pushDebugEvent({
+          streamEvent: 'source_error',
+          source: sourceLabel === 'global' ? 'global' : sourceLabel === 'instance' ? 'instance' : 'bridge',
+          seq: null,
+          eventType: 'source_error',
+          sessionId: null,
+          payload
+        });
+      });
+
+      source.addEventListener('complete', (event) => {
+        const payload = parseEventJson(event.data);
+        pushDebugEvent({
+          streamEvent: 'complete',
+          source: 'bridge',
+          seq: null,
+          eventType: 'complete',
+          sessionId: null,
+          payload
+        });
+      });
+
+      source.onerror = () => {
+        setEventConnectionState('error');
+        setEventConnectionError('Event stream disconnected. Using polling fallback and retrying.');
+
+        pushDebugEvent({
+          streamEvent: 'error',
+          source: 'bridge',
+          seq: null,
+          eventType: 'connection_error',
+          sessionId: null,
+          payload: { message: 'Event stream disconnected.' }
+        });
+
+        source?.close();
+        source = null;
+        clearReconnect();
+        reconnectTimer = setTimeout(() => {
+          connect();
+        }, 3000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      disposed = true;
+      clearReconnect();
+      source?.close();
+      source = null;
+    };
+  }, [pushDebugEvent, scheduleMonitorRefreshFromEvent]);
+
+  useEffect(() => {
     void refreshMonitor();
     const timer = setInterval(() => {
       void refreshMonitor({ silent: true });
-    }, 12000);
+    }, eventConnectionState === 'connected' ? MONITOR_POLL_MS_CONNECTED : MONITOR_POLL_MS_DISCONNECTED);
     return () => clearInterval(timer);
-  }, [refreshMonitor]);
+  }, [eventConnectionState, refreshMonitor]);
 
   useEffect(() => {
     if (!activeSessionId) {
       setSessionDetail(null);
+      setSessionTimeline(null);
+      setTranscriptError(null);
       return;
     }
     void refreshSessionDetail(activeSessionId);
+    void refreshSessionTimeline(activeSessionId);
     const timer = setInterval(() => {
       void refreshSessionDetail(activeSessionId, { silent: true });
-    }, 9000);
+      void refreshSessionTimeline(activeSessionId, { silent: true });
+    }, eventConnectionState === 'connected' ? SESSION_POLL_MS_CONNECTED : SESSION_POLL_MS_DISCONNECTED);
     return () => clearInterval(timer);
-  }, [activeSessionId, refreshSessionDetail]);
+  }, [activeSessionId, eventConnectionState, refreshSessionDetail, refreshSessionTimeline]);
+
+  useEffect(() => {
+    return () => {
+      if (refreshMonitorTimerRef.current) clearTimeout(refreshMonitorTimerRef.current);
+      if (refreshSessionTimerRef.current) clearTimeout(refreshSessionTimerRef.current);
+    };
+  }, []);
 
   const sessions = monitor?.sessions.sessions ?? EMPTY_SESSIONS;
   const permissions = monitor?.permissions ?? [];
@@ -1002,6 +1379,20 @@ export default function OpenCodeMonitorPage() {
     if (!activeSessionId) return null;
     return sessions.find((session) => session.id === activeSessionId) || null;
   }, [activeSessionId, sessions]);
+
+  const selectedSessionStatus = useMemo(() => {
+    if (!activeSessionId) return null;
+    return asRecord(monitor?.sessionStatus?.[activeSessionId]) ?? null;
+  }, [activeSessionId, monitor?.sessionStatus]);
+
+  const todoSummary = useMemo(() => summarizeTodoItems(sessionDetail?.todo), [sessionDetail?.todo]);
+  const diffSummary = useMemo(() => summarizeDiff(sessionDetail?.diff), [sessionDetail?.diff]);
+  const usageSummary = useMemo(() => summarizeSessionUsage(selectedSessionStatus), [selectedSessionStatus]);
+
+  const filteredDebugEvents = useMemo(() => {
+    if (eventDebugFilter === 'all') return eventDebugEvents;
+    return eventDebugEvents.filter((entry) => entry.source === eventDebugFilter);
+  }, [eventDebugEvents, eventDebugFilter]);
 
   const selectedOperation = useMemo(() => {
     return SESSION_OPERATION_DEFINITIONS.find((item) => item.id === sessionOperationId) || null;
@@ -1072,6 +1463,7 @@ export default function OpenCodeMonitorPage() {
     void refreshMonitor();
     if (activeSessionId) {
       void refreshSessionDetail(activeSessionId);
+      void refreshSessionTimeline(activeSessionId);
     }
   };
 
@@ -1138,7 +1530,8 @@ export default function OpenCodeMonitorPage() {
       setQuickPrompt('');
       await Promise.all([
         refreshMonitor({ silent: true }),
-        refreshSessionDetail(activeSessionId, { silent: true })
+        refreshSessionDetail(activeSessionId, { silent: true }),
+        refreshSessionTimeline(activeSessionId, { silent: true })
       ]);
       setEngineState('ready');
     } catch (error) {
@@ -1177,11 +1570,15 @@ export default function OpenCodeMonitorPage() {
       if (selectedOperation.id === 'session-delete') {
         setActiveSessionId(null);
         setSessionDetail(null);
+        setSessionTimeline(null);
       }
 
       await refreshMonitor({ silent: true });
       if (activeSessionId && selectedOperation.id !== 'session-delete') {
-        await refreshSessionDetail(activeSessionId, { silent: true });
+        await Promise.all([
+          refreshSessionDetail(activeSessionId, { silent: true }),
+          refreshSessionTimeline(activeSessionId, { silent: true })
+        ]);
       }
       setEngineState('ready');
     } catch (error) {
@@ -1189,6 +1586,196 @@ export default function OpenCodeMonitorPage() {
       setEngineState('error');
     } finally {
       setIsOperationRunning(false);
+    }
+  };
+
+  const handleUndoSession = async () => {
+    if (!activeSessionId) return;
+    setIsOperationRunning(true);
+    setOperationError(null);
+    setEngineState('booting');
+
+    try {
+      const response = await callControl({
+        path: `/session/${encodeURIComponent(activeSessionId)}/revert`,
+        method: 'POST',
+        body: {}
+      });
+      setOperationResult(response);
+      if (!response.ok) {
+        throw new Error(response.text || 'Undo failed.');
+      }
+
+      await Promise.all([
+        refreshMonitor({ silent: true }),
+        refreshSessionDetail(activeSessionId, { silent: true }),
+        refreshSessionTimeline(activeSessionId, { silent: true })
+      ]);
+      setEngineState('ready');
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Undo failed.');
+      setEngineState('error');
+    } finally {
+      setIsOperationRunning(false);
+    }
+  };
+
+  const handleRedoSession = async () => {
+    if (!activeSessionId) return;
+    setIsOperationRunning(true);
+    setOperationError(null);
+    setEngineState('booting');
+
+    try {
+      const response = await callControl({
+        path: `/session/${encodeURIComponent(activeSessionId)}/unrevert`,
+        method: 'POST'
+      });
+      setOperationResult(response);
+      if (!response.ok) {
+        throw new Error(response.text || 'Redo failed.');
+      }
+
+      await Promise.all([
+        refreshMonitor({ silent: true }),
+        refreshSessionDetail(activeSessionId, { silent: true }),
+        refreshSessionTimeline(activeSessionId, { silent: true })
+      ]);
+      setEngineState('ready');
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Redo failed.');
+      setEngineState('error');
+    } finally {
+      setIsOperationRunning(false);
+    }
+  };
+
+  const handleMessageFork = async (messageId: string) => {
+    if (!activeSessionId || !messageId) return;
+    setIsOperationRunning(true);
+    setOperationError(null);
+    setEngineState('booting');
+
+    try {
+      const response = await callControl({
+        path: `/session/${encodeURIComponent(activeSessionId)}/fork`,
+        method: 'POST',
+        body: { messageID: messageId }
+      });
+      setOperationResult(response);
+      if (!response.ok) {
+        throw new Error(response.text || `Fork failed for message ${messageId}.`);
+      }
+      await refreshMonitor({ silent: true });
+      await refreshSessionTimeline(activeSessionId, { silent: true });
+      setEngineState('ready');
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Fork failed.');
+      setEngineState('error');
+    } finally {
+      setIsOperationRunning(false);
+    }
+  };
+
+  const handleMessageRevert = async (messageId: string) => {
+    if (!activeSessionId || !messageId) return;
+    setIsOperationRunning(true);
+    setOperationError(null);
+    setEngineState('booting');
+
+    try {
+      const response = await callControl({
+        path: `/session/${encodeURIComponent(activeSessionId)}/revert`,
+        method: 'POST',
+        body: { messageID: messageId }
+      });
+      setOperationResult(response);
+      if (!response.ok) {
+        throw new Error(response.text || `Revert failed for message ${messageId}.`);
+      }
+      await Promise.all([
+        refreshMonitor({ silent: true }),
+        refreshSessionDetail(activeSessionId, { silent: true }),
+        refreshSessionTimeline(activeSessionId, { silent: true })
+      ]);
+      setEngineState('ready');
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Revert failed.');
+      setEngineState('error');
+    } finally {
+      setIsOperationRunning(false);
+    }
+  };
+
+  const handleCopyMessage = async (message: OpenCodeSessionMessage) => {
+    try {
+      await navigator.clipboard.writeText(message.text || prettyJson(message.parts));
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Unable to copy message.');
+    }
+  };
+
+  const handleCopyTranscript = async () => {
+    if (!activeSessionId) return;
+    setIsTranscriptRunning(true);
+    setTranscriptError(null);
+
+    try {
+      const response = await fetch(
+        `/api/opencode/session/${encodeURIComponent(activeSessionId)}/transcript?toolDetails=1&assistantMetadata=1`,
+        {
+          cache: 'no-store'
+        }
+      );
+      const payload = (await response.json()) as OpenCodeSessionTranscript | { error?: string };
+      if (!response.ok) {
+        throw new Error((payload as { error?: string }).error || 'Failed to build transcript.');
+      }
+      const transcript = payload as OpenCodeSessionTranscript;
+      await navigator.clipboard.writeText(transcript.markdown);
+    } catch (error) {
+      setTranscriptError(error instanceof Error ? error.message : 'Unable to copy transcript.');
+    } finally {
+      setIsTranscriptRunning(false);
+    }
+  };
+
+  const handleExportTranscript = async () => {
+    if (!activeSessionId) return;
+    setIsTranscriptRunning(true);
+    setTranscriptError(null);
+
+    try {
+      const response = await fetch(
+        `/api/opencode/session/${encodeURIComponent(activeSessionId)}/transcript?toolDetails=1&assistantMetadata=1`,
+        {
+          cache: 'no-store'
+        }
+      );
+      const payload = (await response.json()) as OpenCodeSessionTranscript | { error?: string };
+      if (!response.ok) {
+        throw new Error((payload as { error?: string }).error || 'Failed to export transcript.');
+      }
+
+      const transcript = payload as OpenCodeSessionTranscript;
+      const slug = (sessionDetail?.session.title || activeSessionId)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      const filename = `${slug || 'session'}-${new Date().toISOString().slice(0, 10)}.md`;
+      const blob = new Blob([transcript.markdown], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setTranscriptError(error instanceof Error ? error.message : 'Unable to export transcript.');
+    } finally {
+      setIsTranscriptRunning(false);
     }
   };
 
@@ -1212,7 +1799,12 @@ export default function OpenCodeMonitorPage() {
       }
 
       await refreshMonitor({ silent: true });
-      if (activeSessionId) await refreshSessionDetail(activeSessionId, { silent: true });
+      if (activeSessionId) {
+        await Promise.all([
+          refreshSessionDetail(activeSessionId, { silent: true }),
+          refreshSessionTimeline(activeSessionId, { silent: true })
+        ]);
+      }
       setEngineState('ready');
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : 'Permission response failed.');
@@ -1239,7 +1831,12 @@ export default function OpenCodeMonitorPage() {
         throw new Error(response.text || `Question reply failed for ${requestId}.`);
       }
       await refreshMonitor({ silent: true });
-      if (activeSessionId) await refreshSessionDetail(activeSessionId, { silent: true });
+      if (activeSessionId) {
+        await Promise.all([
+          refreshSessionDetail(activeSessionId, { silent: true }),
+          refreshSessionTimeline(activeSessionId, { silent: true })
+        ]);
+      }
       setEngineState('ready');
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : 'Question reply failed.');
@@ -1263,7 +1860,12 @@ export default function OpenCodeMonitorPage() {
         throw new Error(response.text || `Question rejection failed for ${requestId}.`);
       }
       await refreshMonitor({ silent: true });
-      if (activeSessionId) await refreshSessionDetail(activeSessionId, { silent: true });
+      if (activeSessionId) {
+        await Promise.all([
+          refreshSessionDetail(activeSessionId, { silent: true }),
+          refreshSessionTimeline(activeSessionId, { silent: true })
+        ]);
+      }
       setEngineState('ready');
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : 'Question rejection failed.');
@@ -1351,7 +1953,12 @@ export default function OpenCodeMonitorPage() {
       }
 
       await refreshMonitor({ silent: true });
-      if (activeSessionId) await refreshSessionDetail(activeSessionId, { silent: true });
+      if (activeSessionId) {
+        await Promise.all([
+          refreshSessionDetail(activeSessionId, { silent: true }),
+          refreshSessionTimeline(activeSessionId, { silent: true })
+        ]);
+      }
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'API request failed.');
       setEngineState('error');
@@ -1442,6 +2049,19 @@ export default function OpenCodeMonitorPage() {
               <Badge>{sessions.length} sessions</Badge>
               <Badge>{permissions.length} permissions</Badge>
               <Badge>{questions.length} questions</Badge>
+              <Badge
+                className={cn(
+                  eventConnectionState === 'connected' &&
+                    'border-[var(--success-border)] bg-[var(--success-soft)] text-[var(--success)]',
+                  eventConnectionState === 'connecting' &&
+                    'border-[var(--warning-border)] bg-[var(--warning-soft)] text-[var(--warning)]',
+                  eventConnectionState === 'error' &&
+                    'border-[var(--critical-border)] bg-[var(--critical-soft)] text-[var(--critical)]'
+                )}
+              >
+                events: {eventConnectionState}
+              </Badge>
+              <Badge>{eventDebugEvents.length} event log</Badge>
             </div>
           </CardHeader>
         </Card>
@@ -1523,6 +2143,78 @@ export default function OpenCodeMonitorPage() {
                     </pre>
                   </details>
                 )}
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <Activity className="h-4 w-4 text-[var(--accent)]" />
+                    Event Stream
+                  </CardTitle>
+                  <Badge
+                    className={cn(
+                      eventConnectionState === 'connected' &&
+                        'border-[var(--success-border)] bg-[var(--success-soft)] text-[var(--success)]',
+                      eventConnectionState === 'connecting' &&
+                        'border-[var(--warning-border)] bg-[var(--warning-soft)] text-[var(--warning)]',
+                      eventConnectionState === 'error' &&
+                        'border-[var(--critical-border)] bg-[var(--critical-soft)] text-[var(--critical)]'
+                    )}
+                  >
+                    {eventConnectionState}
+                  </Badge>
+                </div>
+                <CardDescription>SSE-driven monitor updates with polling fallback.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <select
+                    value={eventDebugFilter}
+                    onChange={(event) =>
+                      setEventDebugFilter(event.target.value as 'all' | 'instance' | 'global' | 'bridge')
+                    }
+                    className="h-9 rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                  >
+                    <option value="all">all sources</option>
+                    <option value="instance">instance</option>
+                    <option value="global">global</option>
+                    <option value="bridge">bridge</option>
+                  </select>
+                  <Button size="sm" variant="secondary" onClick={() => setEventDebugEvents([])}>
+                    clear
+                  </Button>
+                </div>
+
+                {eventConnectionError && (
+                  <div className="rounded-lg border border-[var(--warning-border)] bg-[var(--warning-soft)] p-2.5 text-[11px] text-[var(--warning)]">
+                    {eventConnectionError}
+                  </div>
+                )}
+
+                <div className="oc-scroll max-h-56 space-y-2 overflow-y-auto">
+                  {filteredDebugEvents.length === 0 && (
+                    <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] px-3 py-4 text-center text-[12px] text-[var(--text-weak)]">
+                      No events captured yet.
+                    </div>
+                  )}
+
+                  {filteredDebugEvents.map((entry) => (
+                    <article key={entry.id} className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-2.5">
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <Badge>{entry.source}</Badge>
+                        <Badge>{entry.streamEvent}</Badge>
+                        <Badge>{entry.eventType}</Badge>
+                        {entry.seq !== null && <Badge>#{entry.seq}</Badge>}
+                      </div>
+                      <p className="mt-1 text-[11px] text-[var(--text-weaker)]">{formatRelativeTime(entry.timestamp)}</p>
+                      {entry.sessionId && (
+                        <p className="oc-mono mt-1 text-[11px] text-[var(--text-weak)]">session {entry.sessionId}</p>
+                      )}
+                    </article>
+                  ))}
+                </div>
               </CardContent>
             </Card>
 
@@ -1823,6 +2515,7 @@ export default function OpenCodeMonitorPage() {
                   <div className="flex items-center gap-2">
                     <Badge>{sessions.length} sessions</Badge>
                     <Badge>{sessionDetail?.messageCount ?? 0} messages</Badge>
+                    <Badge>{sessionTimeline?.count ?? 0} timeline</Badge>
                     {isSessionDetailLoading && <Badge>loading</Badge>}
                   </div>
                 </div>
@@ -1906,8 +2599,21 @@ export default function OpenCodeMonitorPage() {
                     {activeSessionId && sessionDetail && sessionDetail.session.id === activeSessionId && (
                       <div className="space-y-3">
                         <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-raised)] p-3">
-                          <p className="text-[13px] font-medium text-[var(--text-strong)]">{sessionDetail.session.title}</p>
-                          <p className="oc-mono mt-1 text-[11px] text-[var(--text-weak)]">{sessionDetail.session.id}</p>
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <p className="text-[13px] font-medium text-[var(--text-strong)]">{sessionDetail.session.title}</p>
+                              <p className="oc-mono mt-1 text-[11px] text-[var(--text-weak)]">{sessionDetail.session.id}</p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button size="sm" variant="secondary" disabled={isOperationRunning} onClick={handleUndoSession}>
+                                undo
+                              </Button>
+                              <Button size="sm" variant="secondary" disabled={isOperationRunning} onClick={handleRedoSession}>
+                                redo
+                              </Button>
+                            </div>
+                          </div>
+
                           <div className="mt-2 grid gap-1 text-[11px] text-[var(--text-weak)] sm:grid-cols-2">
                             <p>Created: {formatDateTime(sessionDetail.session.createdAt)}</p>
                             <p>Updated: {formatDateTime(sessionDetail.session.updatedAt)}</p>
@@ -1919,6 +2625,121 @@ export default function OpenCodeMonitorPage() {
                               {selectedSession.directory}
                             </p>
                           )}
+
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {(sessionDetail.session.parentId || selectedSession?.parentId) && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => setActiveSessionId(sessionDetail.session.parentId || selectedSession?.parentId || null)}
+                              >
+                                parent {(sessionDetail.session.parentId || selectedSession?.parentId || '').slice(0, 12)}
+                              </Button>
+                            )}
+                            {(sessionDetail.children || []).map((child) => (
+                              <Button key={child.id} size="sm" variant="secondary" onClick={() => setActiveSessionId(child.id)}>
+                                child {child.id.slice(0, 12)}
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="grid gap-2 md:grid-cols-3">
+                          <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-raised)] p-3 text-[11px]">
+                            <p className="oc-kicker">Todo</p>
+                            <p className="mt-1 text-[var(--text-strong)]">
+                              {todoSummary.open} open / {todoSummary.done} done
+                            </p>
+                            <p className="text-[var(--text-weaker)]">{todoSummary.total} total items</p>
+                          </div>
+                          <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-raised)] p-3 text-[11px]">
+                            <p className="oc-kicker">Diff</p>
+                            <p className="mt-1 text-[var(--text-strong)]">
+                              {(diffSummary.files ?? sessionDetail.session.filesChanged ?? 0).toString()} files
+                            </p>
+                            <p className="text-[var(--text-weaker)]">
+                              +{diffSummary.additions ?? sessionDetail.session.additions} / -
+                              {diffSummary.deletions ?? sessionDetail.session.deletions}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-raised)] p-3 text-[11px]">
+                            <p className="oc-kicker">Context / Cost</p>
+                            <p className="mt-1 text-[var(--text-strong)]">
+                              {usageSummary.context !== null ? `${usageSummary.context} tokens` : 'not reported'}
+                            </p>
+                            <p className="text-[var(--text-weaker)]">
+                              {usageSummary.cost !== null ? `$${usageSummary.cost.toFixed(4)}` : 'cost unavailable'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-raised)] p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[12px] font-medium text-[var(--text-strong)]">Transcript</p>
+                            <div className="flex flex-wrap gap-2">
+                              <Button size="sm" variant="secondary" disabled={isTranscriptRunning} onClick={handleCopyTranscript}>
+                                copy markdown
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                disabled={isTranscriptRunning}
+                                onClick={handleExportTranscript}
+                              >
+                                export .md
+                              </Button>
+                            </div>
+                          </div>
+                          {transcriptError && <p className="mt-2 text-[11px] text-[var(--critical)]">{transcriptError}</p>}
+                        </div>
+
+                        <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-raised)] p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <p className="text-[12px] font-medium text-[var(--text-strong)]">Timeline</p>
+                            {isTimelineLoading && <Badge>loading</Badge>}
+                          </div>
+                          {timelineError && <p className="mb-2 text-[11px] text-[var(--critical)]">{timelineError}</p>}
+                          <div className="oc-scroll max-h-44 space-y-2 overflow-y-auto">
+                            {!sessionTimeline || sessionTimeline.entries.length === 0 ? (
+                              <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] px-3 py-3 text-center text-[12px] text-[var(--text-weak)]">
+                                No timeline entries.
+                              </div>
+                            ) : (
+                              sessionTimeline.entries.map((entry) => (
+                                <article
+                                  key={entry.messageId}
+                                  className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-2.5"
+                                >
+                                  <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                                    <Badge>{entry.assistantState}</Badge>
+                                    {entry.hasDiffMarker && <Badge>diff</Badge>}
+                                    <span className="text-[11px] text-[var(--text-weaker)]">
+                                      {formatRelativeTime(entry.createdAt)}
+                                    </span>
+                                  </div>
+                                  <p className="line-clamp-2 text-[12px] text-[var(--text-base)]">{entry.preview}</p>
+                                  <div className="mt-2 flex flex-wrap gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      disabled={isOperationRunning}
+                                      onClick={() => void handleMessageRevert(entry.messageId)}
+                                    >
+                                      revert
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      disabled={isOperationRunning}
+                                      onClick={() => void handleMessageFork(entry.messageId)}
+                                    >
+                                      fork
+                                    </Button>
+                                  </div>
+                                </article>
+                              ))
+                            )}
+                          </div>
                         </div>
 
                         <div className="oc-scroll max-h-[460px] space-y-2 overflow-y-auto">
@@ -1933,16 +2754,39 @@ export default function OpenCodeMonitorPage() {
                               key={message.id}
                               className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-raised)] p-3"
                             >
-                              <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px]">
-                                <span className={cn('rounded-md border px-2 py-0.5 uppercase', roleTone(message.role))}>
-                                  {message.role}
-                                </span>
-                                <span className="text-[var(--text-weaker)]">{formatRelativeTime(message.createdAt)}</span>
-                                {message.hasRunningToolCall && (
-                                  <span className="rounded-md border border-[var(--warning-border)] bg-[var(--warning-soft)] px-2 py-0.5 text-[var(--warning)]">
-                                    running tool
+                              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className={cn('rounded-md border px-2 py-0.5 uppercase', roleTone(message.role))}>
+                                    {message.role}
                                   </span>
-                                )}
+                                  <span className="text-[var(--text-weaker)]">{formatRelativeTime(message.createdAt)}</span>
+                                  {message.hasRunningToolCall && (
+                                    <span className="rounded-md border border-[var(--warning-border)] bg-[var(--warning-soft)] px-2 py-0.5 text-[var(--warning)]">
+                                      running tool
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button size="sm" variant="secondary" onClick={() => void handleCopyMessage(message)}>
+                                    copy
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    disabled={isOperationRunning}
+                                    onClick={() => void handleMessageRevert(message.id)}
+                                  >
+                                    revert
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    disabled={isOperationRunning}
+                                    onClick={() => void handleMessageFork(message.id)}
+                                  >
+                                    fork
+                                  </Button>
+                                </div>
                               </div>
 
                               {message.text ? (
