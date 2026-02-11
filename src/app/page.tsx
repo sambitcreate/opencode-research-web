@@ -5,10 +5,7 @@ import {
   Activity,
   AlertCircle,
   CheckCircle2,
-  Clock3,
   Database,
-  ExternalLink,
-  History,
   LoaderCircle,
   MonitorCog,
   Moon,
@@ -26,27 +23,6 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
-
-type QueryResult = {
-  id: string;
-  query: string;
-  status: string;
-  sessionId?: string;
-  answer?: string;
-  sources?: string[];
-  timestamp: string;
-  metadata: {
-    sources: number;
-    processingTime: number;
-    confidenceScore: number;
-    opencode?: {
-      host: string;
-      port: number;
-      started: boolean;
-      command: string;
-    };
-  };
-};
 
 type OpenCodeStatus = {
   running: boolean;
@@ -87,6 +63,7 @@ type OpenCodeSessionMessage = {
   text: string;
   partTypes: string[];
   hasRunningToolCall: boolean;
+  parts: Record<string, unknown>[];
 };
 
 type OpenCodeSessionDetail = {
@@ -99,6 +76,46 @@ type OpenCodeSessionDetail = {
   messageCount: number;
   latestMessageAt: string | null;
   activeToolCalls: number;
+};
+
+type OpenCodeHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+type OpenCodeEndpointDefinition = {
+  path: string;
+  methods: OpenCodeHttpMethod[];
+  operationIds: string[];
+};
+
+type OpenCodeOpenApiSnapshot = {
+  source: 'live' | 'fallback';
+  title: string;
+  version: string;
+  endpointCount: number;
+  endpoints: OpenCodeEndpointDefinition[];
+};
+
+type OpenCodeMonitorSnapshot = {
+  status: OpenCodeStatus;
+  sessions: OpenCodeSessionsResponse;
+  sessionStatus: Record<string, unknown>;
+  permissions: Record<string, unknown>[];
+  questions: Record<string, unknown>[];
+  providers: unknown;
+  commands: unknown;
+  agents: unknown;
+  skills: unknown;
+  pathInfo: unknown;
+  vcsInfo: unknown;
+  openapi: OpenCodeOpenApiSnapshot;
+  errors: string[];
+};
+
+type OpenCodeControlResponse = {
+  ok: boolean;
+  status: number;
+  contentType: string;
+  data: unknown;
+  text: string;
 };
 
 type ColorScheme = 'system' | 'light' | 'dark';
@@ -154,13 +171,18 @@ type ThemeDefinition = {
 
 type ThemeStyle = React.CSSProperties & Record<`--${string}`, string>;
 
-const QUERY_PRESETS = [
-  'Track the latest advances in battery recycling in the US and summarize risks.',
-  'Compare local LLM frameworks for offline research workflows on Linux.',
-  'Analyze 5 credible sources on sleep and productivity and build a concise brief.'
-];
+type SessionOperationDefinition = {
+  id: string;
+  label: string;
+  method: OpenCodeHttpMethod;
+  path: string;
+  template: string;
+  requiresBody: boolean;
+};
 
 const EMPTY_SESSIONS: OpenCodeSessionSummary[] = [];
+const EMPTY_OPENAPI_ENDPOINTS: OpenCodeEndpointDefinition[] = [];
+const DEFAULT_API_METHODS: OpenCodeHttpMethod[] = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'];
 
 const SHADOW_DARK =
   '0 0 0 1px rgba(252,251,251,0.16), 0 1px 2px -1px rgba(0,0,0,0.26), 0 1px 2px 0 rgba(0,0,0,0.22), 0 2px 6px 0 rgba(0,0,0,0.18)';
@@ -498,6 +520,209 @@ const THEME_DEFINITIONS: ThemeDefinition[] = [
   }
 ];
 
+const SESSION_OPERATION_DEFINITIONS: SessionOperationDefinition[] = [
+  {
+    id: 'session-prompt',
+    label: 'Prompt (sync)',
+    method: 'POST',
+    path: '/session/{sessionID}/message',
+    template: `{
+  "parts": [
+    { "type": "text", "text": "Describe the current repo state." }
+  ]
+}`,
+    requiresBody: true
+  },
+  {
+    id: 'session-prompt-async',
+    label: 'Prompt (async)',
+    method: 'POST',
+    path: '/session/{sessionID}/prompt_async',
+    template: `{
+  "parts": [
+    { "type": "text", "text": "Run this in background and summarize changes." }
+  ]
+}`,
+    requiresBody: true
+  },
+  {
+    id: 'session-command',
+    label: 'Command',
+    method: 'POST',
+    path: '/session/{sessionID}/command',
+    template: `{
+  "command": "review",
+  "arguments": "latest changes"
+}`,
+    requiresBody: true
+  },
+  {
+    id: 'session-shell',
+    label: 'Shell',
+    method: 'POST',
+    path: '/session/{sessionID}/shell',
+    template: `{
+  "agent": "build",
+  "command": "npm run lint"
+}`,
+    requiresBody: true
+  },
+  {
+    id: 'session-update',
+    label: 'Update Session',
+    method: 'PATCH',
+    path: '/session/{sessionID}',
+    template: `{
+  "title": "Renamed session"
+}`,
+    requiresBody: true
+  },
+  {
+    id: 'session-init',
+    label: 'Initialize Session',
+    method: 'POST',
+    path: '/session/{sessionID}/init',
+    template: `{
+  "providerID": "openai",
+  "modelID": "gpt-5",
+  "messageID": "msg_..."
+}`,
+    requiresBody: true
+  },
+  {
+    id: 'session-fork',
+    label: 'Fork Session',
+    method: 'POST',
+    path: '/session/{sessionID}/fork',
+    template: `{
+  "messageID": "msg_..."
+}`,
+    requiresBody: false
+  },
+  {
+    id: 'session-revert',
+    label: 'Revert',
+    method: 'POST',
+    path: '/session/{sessionID}/revert',
+    template: `{
+  "messageID": "msg_..."
+}`,
+    requiresBody: true
+  },
+  {
+    id: 'session-unrevert',
+    label: 'Unrevert',
+    method: 'POST',
+    path: '/session/{sessionID}/unrevert',
+    template: '{}',
+    requiresBody: false
+  },
+  {
+    id: 'session-abort',
+    label: 'Abort',
+    method: 'POST',
+    path: '/session/{sessionID}/abort',
+    template: '{}',
+    requiresBody: false
+  },
+  {
+    id: 'session-share',
+    label: 'Share',
+    method: 'POST',
+    path: '/session/{sessionID}/share',
+    template: '{}',
+    requiresBody: false
+  },
+  {
+    id: 'session-unshare',
+    label: 'Unshare',
+    method: 'DELETE',
+    path: '/session/{sessionID}/share',
+    template: '{}',
+    requiresBody: false
+  },
+  {
+    id: 'session-summarize',
+    label: 'Summarize',
+    method: 'POST',
+    path: '/session/{sessionID}/summarize',
+    template: `{
+  "providerID": "openai",
+  "modelID": "gpt-5",
+  "auto": false
+}`,
+    requiresBody: true
+  },
+  {
+    id: 'session-delete',
+    label: 'Delete Session',
+    method: 'DELETE',
+    path: '/session/{sessionID}',
+    template: '{}',
+    requiresBody: false
+  }
+];
+
+const TUI_SHORTCUTS = [
+  { label: 'Help', path: '/tui/open-help' },
+  { label: 'Sessions', path: '/tui/open-sessions' },
+  { label: 'Themes', path: '/tui/open-themes' },
+  { label: 'Models', path: '/tui/open-models' },
+  { label: 'Submit Prompt', path: '/tui/submit-prompt' },
+  { label: 'Clear Prompt', path: '/tui/clear-prompt' }
+];
+
+const TUI_COMMAND_CHOICES = [
+  'session_new',
+  'session_share',
+  'session_interrupt',
+  'session_compact',
+  'messages_page_up',
+  'messages_page_down',
+  'messages_line_up',
+  'messages_line_down',
+  'messages_half_page_up',
+  'messages_half_page_down',
+  'messages_first',
+  'messages_last',
+  'agent_cycle'
+];
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function prettyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function extractString(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return null;
+}
+
+function extractIdentifier(value: unknown): string | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const direct = extractString(record, ['requestID', 'id', 'sessionID']);
+  if (direct) return direct;
+  const nested = asRecord(record.request);
+  if (!nested) return null;
+  return extractString(nested, ['requestID', 'id', 'sessionID']);
+}
+
+function resolveSessionPath(templatePath: string, sessionId: string): string {
+  return templatePath.replaceAll('{sessionID}', encodeURIComponent(sessionId));
+}
+
 function formatDateTime(value: string | null): string {
   if (!value) return 'unknown';
   const date = new Date(value);
@@ -577,68 +802,110 @@ function toThemeStyle(theme: ThemePalette): ThemeStyle {
   };
 }
 
-export default function ResearchPage() {
-  const [query, setQuery] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [results, setResults] = useState<QueryResult[]>([]);
-  const [history, setHistory] = useState<string[]>([]);
+export default function OpenCodeMonitorPage() {
+  const [monitor, setMonitor] = useState<OpenCodeMonitorSnapshot | null>(null);
   const [engine, setEngine] = useState<OpenCodeStatus | null>(null);
   const [engineState, setEngineState] = useState<EngineState>('checking');
-  const [queryError, setQueryError] = useState<string | null>(null);
-  const [statusError, setStatusError] = useState<string | null>(null);
+  const [monitorError, setMonitorError] = useState<string | null>(null);
+  const [isMonitorLoading, setIsMonitorLoading] = useState(false);
 
-  const [sessionList, setSessionList] = useState<OpenCodeSessionsResponse | null>(null);
   const [sessionDetail, setSessionDetail] = useState<OpenCodeSessionDetail | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [isSessionListLoading, setIsSessionListLoading] = useState(false);
   const [isSessionDetailLoading, setIsSessionDetailLoading] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [sessionSearch, setSessionSearch] = useState('');
+
+  const [newSessionTitle, setNewSessionTitle] = useState('');
+  const [newSessionParent, setNewSessionParent] = useState('');
+  const [quickPrompt, setQuickPrompt] = useState('');
+  const [quickPromptMode, setQuickPromptMode] = useState<'sync' | 'async'>('sync');
+
+  const [sessionOperationId, setSessionOperationId] = useState<string>(SESSION_OPERATION_DEFINITIONS[0]?.id ?? '');
+  const [sessionOperationBody, setSessionOperationBody] = useState<string>(SESSION_OPERATION_DEFINITIONS[0]?.template ?? '{}');
+  const [operationResult, setOperationResult] = useState<OpenCodeControlResponse | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
+  const [isOperationRunning, setIsOperationRunning] = useState(false);
+
+  const [permissionMessages, setPermissionMessages] = useState<Record<string, string>>({});
+  const [questionReplies, setQuestionReplies] = useState<Record<string, string>>({});
+  const [tuiCommand, setTuiCommand] = useState<string>(TUI_COMMAND_CHOICES[0] ?? 'agent_cycle');
+
+  const [apiPath, setApiPath] = useState('/global/health');
+  const [apiMethod, setApiMethod] = useState<OpenCodeHttpMethod>('GET');
+  const [apiBody, setApiBody] = useState('{}');
+  const [apiResponse, setApiResponse] = useState<OpenCodeControlResponse | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [isApiRunning, setIsApiRunning] = useState(false);
 
   const [themeId, setThemeId] = useState<string>('oc-1');
   const [colorScheme, setColorScheme] = useState<ColorScheme>('system');
   const [systemPrefersDark, setSystemPrefersDark] = useState(true);
 
-  const refreshStatus = useCallback(async () => {
-    try {
-      const response = await fetch('/api/opencode/status', { cache: 'no-store' });
-      if (!response.ok) throw new Error('Failed to fetch OpenCode status');
-      const data = (await response.json()) as OpenCodeStatus;
-      setEngine(data);
-      setStatusError(null);
-      setEngineState(data.running ? 'ready' : 'offline');
-    } catch (error) {
-      setStatusError(error instanceof Error ? error.message : 'Unable to load OpenCode status');
-      setEngineState('error');
-    }
-  }, []);
-
-  const refreshSessions = useCallback(async (options?: { silent?: boolean }) => {
-    if (!options?.silent) setIsSessionListLoading(true);
-
-    try {
-      const response = await fetch('/api/opencode/sessions?limit=60', { cache: 'no-store' });
-      const data = (await response.json()) as OpenCodeSessionsResponse | { error?: string };
-
-      if (!response.ok) {
-        throw new Error((data as { error?: string }).error || 'Failed to load OpenCode sessions');
-      }
-
-      const snapshot = data as OpenCodeSessionsResponse;
-      setSessionList(snapshot);
-      setSessionError(null);
-      setActiveSessionId((current) => {
-        if (current && snapshot.sessions.some((session) => session.id === current)) return current;
-        return snapshot.sessions[0]?.id || null;
+  const callControl = useCallback(
+    async (input: {
+      path: string;
+      method?: OpenCodeHttpMethod;
+      body?: unknown;
+      timeoutMs?: number;
+      parseSsePayload?: boolean;
+    }): Promise<OpenCodeControlResponse> => {
+      const response = await fetch('/api/opencode/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: input.path,
+          method: input.method ?? 'GET',
+          body: input.body,
+          timeoutMs: input.timeoutMs,
+          parseSsePayload: input.parseSsePayload === true,
+          autostart: true
+        })
       });
 
-      if (snapshot.sessions.length === 0) {
-        setSessionDetail(null);
+      const payload = (await response.json()) as OpenCodeControlResponse | { error?: string };
+      if (
+        payload &&
+        typeof payload === 'object' &&
+        'ok' in payload &&
+        'status' in payload &&
+        'contentType' in payload
+      ) {
+        return payload as OpenCodeControlResponse;
       }
+
+      const message =
+        typeof (payload as { error?: string }).error === 'string'
+          ? (payload as { error?: string }).error
+          : `OpenCode control request failed with status ${response.status}`;
+      throw new Error(message);
+    },
+    []
+  );
+
+  const refreshMonitor = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) setIsMonitorLoading(true);
+
+    try {
+      const response = await fetch('/api/opencode/monitor?sessionLimit=120&autostart=0', { cache: 'no-store' });
+      const payload = (await response.json()) as OpenCodeMonitorSnapshot | { error?: string };
+      if (!response.ok) {
+        throw new Error((payload as { error?: string }).error || 'Failed to fetch OpenCode monitor snapshot.');
+      }
+
+      const snapshot = payload as OpenCodeMonitorSnapshot;
+      setMonitor(snapshot);
+      setEngine(snapshot.status);
+      setMonitorError(null);
+      setEngineState(snapshot.status.running ? 'ready' : 'offline');
+      setActiveSessionId((current) => {
+        if (current && snapshot.sessions.sessions.some((session) => session.id === current)) return current;
+        return snapshot.sessions.sessions[0]?.id || null;
+      });
     } catch (error) {
-      setSessionError(error instanceof Error ? error.message : 'Unable to load session list');
+      setMonitorError(error instanceof Error ? error.message : 'Unable to load monitor snapshot.');
+      setEngineState('error');
     } finally {
-      if (!options?.silent) setIsSessionListLoading(false);
+      if (!options?.silent) setIsMonitorLoading(false);
     }
   }, []);
 
@@ -648,37 +915,25 @@ export default function ResearchPage() {
 
     try {
       const response = await fetch(
-        `/api/opencode/sessions?sessionId=${encodeURIComponent(sessionId)}&messageLimit=120`,
-        { cache: 'no-store' }
+        `/api/opencode/sessions?sessionId=${encodeURIComponent(sessionId)}&messageLimit=160`,
+        {
+          cache: 'no-store'
+        }
       );
-      const data = (await response.json()) as OpenCodeSessionDetail | { error?: string };
-
+      const payload = (await response.json()) as OpenCodeSessionDetail | { error?: string };
       if (!response.ok) {
-        throw new Error((data as { error?: string }).error || `Failed to load session ${sessionId}`);
+        throw new Error((payload as { error?: string }).error || `Failed to load session ${sessionId}.`);
       }
-
-      setSessionDetail(data as OpenCodeSessionDetail);
+      setSessionDetail(payload as OpenCodeSessionDetail);
       setSessionError(null);
     } catch (error) {
-      setSessionError(error instanceof Error ? error.message : 'Unable to load session detail');
+      setSessionError(error instanceof Error ? error.message : 'Unable to load session detail.');
     } finally {
       if (!options?.silent) setIsSessionDetailLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    const savedHistory = window.localStorage.getItem('opencode-ui-history');
-    if (savedHistory) {
-      try {
-        const parsed = JSON.parse(savedHistory) as unknown;
-        if (Array.isArray(parsed)) {
-          setHistory(parsed.filter((entry): entry is string => typeof entry === 'string').slice(0, 10));
-        }
-      } catch {
-        // Ignore invalid local history.
-      }
-    }
-
     const savedTheme = window.localStorage.getItem('opencode-ui-theme');
     if (savedTheme && THEME_DEFINITIONS.some((theme) => theme.id === savedTheme)) {
       setThemeId(savedTheme);
@@ -689,10 +944,6 @@ export default function ResearchPage() {
       setColorScheme(savedScheme);
     }
   }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem('opencode-ui-history', JSON.stringify(history.slice(0, 10)));
-  }, [history]);
 
   useEffect(() => {
     window.localStorage.setItem('opencode-ui-theme', themeId);
@@ -711,53 +962,78 @@ export default function ResearchPage() {
   }, []);
 
   useEffect(() => {
-    void refreshStatus();
-    void refreshSessions();
-
+    void refreshMonitor();
     const timer = setInterval(() => {
-      void refreshStatus();
-      void refreshSessions({ silent: true });
-    }, 15000);
-
+      void refreshMonitor({ silent: true });
+    }, 12000);
     return () => clearInterval(timer);
-  }, [refreshSessions, refreshStatus]);
+  }, [refreshMonitor]);
 
   useEffect(() => {
     if (!activeSessionId) {
       setSessionDetail(null);
       return;
     }
-
     void refreshSessionDetail(activeSessionId);
-    const timer = setInterval(() => void refreshSessionDetail(activeSessionId, { silent: true }), 12000);
+    const timer = setInterval(() => {
+      void refreshSessionDetail(activeSessionId, { silent: true });
+    }, 9000);
     return () => clearInterval(timer);
   }, [activeSessionId, refreshSessionDetail]);
 
-  const statusLabel = useMemo(() => {
-    if (engineState === 'checking') return 'Checking local OpenCode engine...';
-    if (engineState === 'offline') return 'Engine offline (auto-starts on query).';
-    if (engineState === 'booting') return 'Booting local OpenCode instance...';
-    if (engineState === 'error') return 'Unable to confirm OpenCode status.';
-    return 'Engine connected and ready.';
-  }, [engineState]);
+  const sessions = monitor?.sessions.sessions ?? EMPTY_SESSIONS;
+  const permissions = monitor?.permissions ?? [];
+  const questions = monitor?.questions ?? [];
 
-  const sessions = sessionList?.sessions ?? EMPTY_SESSIONS;
+  const filteredSessions = useMemo(() => {
+    const query = sessionSearch.trim().toLowerCase();
+    if (!query) return sessions;
+    return sessions.filter((session) => {
+      return (
+        session.title.toLowerCase().includes(query) ||
+        session.id.toLowerCase().includes(query) ||
+        (session.slug || '').toLowerCase().includes(query) ||
+        (session.directory || '').toLowerCase().includes(query)
+      );
+    });
+  }, [sessionSearch, sessions]);
+
   const selectedSession = useMemo(() => {
     if (!activeSessionId) return null;
     return sessions.find((session) => session.id === activeSessionId) || null;
   }, [activeSessionId, sessions]);
 
-  const filteredSessions = useMemo(() => {
-    const q = sessionSearch.trim().toLowerCase();
-    if (!q) return sessions;
-    return sessions.filter((session) => {
-      return (
-        session.title.toLowerCase().includes(q) ||
-        session.id.toLowerCase().includes(q) ||
-        (session.slug || '').toLowerCase().includes(q)
-      );
-    });
-  }, [sessionSearch, sessions]);
+  const selectedOperation = useMemo(() => {
+    return SESSION_OPERATION_DEFINITIONS.find((item) => item.id === sessionOperationId) || null;
+  }, [sessionOperationId]);
+
+  useEffect(() => {
+    if (selectedOperation) {
+      setSessionOperationBody(selectedOperation.template);
+    }
+  }, [selectedOperation]);
+
+  const openApiEndpoints = useMemo(() => monitor?.openapi?.endpoints ?? EMPTY_OPENAPI_ENDPOINTS, [monitor]);
+  useEffect(() => {
+    if (openApiEndpoints.length === 0) return;
+    if (openApiEndpoints.some((endpoint) => endpoint.path === apiPath)) return;
+    setApiPath(openApiEndpoints[0].path);
+  }, [apiPath, openApiEndpoints]);
+
+  const selectedEndpoint = useMemo(() => {
+    return openApiEndpoints.find((endpoint) => endpoint.path === apiPath) || null;
+  }, [apiPath, openApiEndpoints]);
+
+  const selectedApiMethods = useMemo(() => {
+    if (!selectedEndpoint || selectedEndpoint.methods.length === 0) return DEFAULT_API_METHODS;
+    return selectedEndpoint.methods;
+  }, [selectedEndpoint]);
+
+  useEffect(() => {
+    if (!selectedApiMethods.includes(apiMethod)) {
+      setApiMethod(selectedApiMethods[0] || 'GET');
+    }
+  }, [apiMethod, selectedApiMethods]);
 
   const resolvedScheme: ResolvedScheme = useMemo(() => {
     if (colorScheme === 'system') return systemPrefersDark ? 'dark' : 'light';
@@ -773,47 +1049,13 @@ export default function ResearchPage() {
     return toThemeStyle(palette);
   }, [activeTheme, resolvedScheme]);
 
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!query.trim()) return;
-
-    setIsProcessing(true);
-    setQueryError(null);
-    setEngineState('booting');
-
-    try {
-      const response = await fetch('/api/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query })
-      });
-
-      const data = (await response.json()) as QueryResult | { error?: string };
-      if (!response.ok) {
-        throw new Error((data as { error?: string }).error || 'Failed to process research query');
-      }
-
-      const result = data as QueryResult;
-      setResults((prev) => [result, ...prev.filter((entry) => entry.id !== result.id)].slice(0, 3));
-      setHistory((prev) => [query, ...prev.filter((entry) => entry !== query)].slice(0, 10));
-      setEngineState('ready');
-      if (result.sessionId) setActiveSessionId(result.sessionId);
-      void refreshSessions();
-    } catch (error) {
-      setEngineState('error');
-      setQueryError(error instanceof Error ? error.message : 'Failed to process query');
-    } finally {
-      setIsProcessing(false);
-      void refreshStatus();
-    }
-  };
-
-  const handleSessionRefresh = () => {
-    void refreshSessions();
-    if (activeSessionId) {
-      void refreshSessionDetail(activeSessionId);
-    }
-  };
+  const statusLabel = useMemo(() => {
+    if (engineState === 'checking') return 'Checking local OpenCode engine...';
+    if (engineState === 'offline') return 'Engine offline (auto-starts on control requests).';
+    if (engineState === 'booting') return 'Dispatching operation to OpenCode...';
+    if (engineState === 'error') return 'Unable to confirm OpenCode status.';
+    return 'Engine connected and ready.';
+  }, [engineState]);
 
   const cycleScheme = () => {
     setColorScheme((current) => {
@@ -826,9 +1068,301 @@ export default function ResearchPage() {
   const schemeButtonLabel =
     colorScheme === 'system' ? 'System Scheme' : colorScheme === 'light' ? 'Light Scheme' : 'Dark Scheme';
 
+  const handleRefresh = () => {
+    void refreshMonitor();
+    if (activeSessionId) {
+      void refreshSessionDetail(activeSessionId);
+    }
+  };
+
+  const handleCreateSession = async () => {
+    setIsOperationRunning(true);
+    setOperationError(null);
+    setEngineState('booting');
+
+    try {
+      const payload: Record<string, unknown> = {};
+      if (newSessionTitle.trim()) payload.title = newSessionTitle.trim();
+      if (newSessionParent.trim()) payload.parentID = newSessionParent.trim();
+
+      const response = await callControl({
+        path: '/session',
+        method: 'POST',
+        body: payload
+      });
+      setOperationResult(response);
+      if (!response.ok) {
+        throw new Error(response.text || 'OpenCode failed to create the session.');
+      }
+
+      const createdSession = asRecord(response.data);
+      const createdSessionId = createdSession ? extractString(createdSession, ['id']) : null;
+      if (createdSessionId) setActiveSessionId(createdSessionId);
+
+      setNewSessionTitle('');
+      setNewSessionParent('');
+      await refreshMonitor({ silent: true });
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Failed to create session.');
+      setEngineState('error');
+    } finally {
+      setIsOperationRunning(false);
+      void refreshMonitor({ silent: true });
+    }
+  };
+
+  const handleSendPrompt = async () => {
+    if (!activeSessionId || !quickPrompt.trim()) return;
+
+    setIsOperationRunning(true);
+    setOperationError(null);
+    setEngineState('booting');
+
+    try {
+      const path =
+        quickPromptMode === 'async'
+          ? `/session/${encodeURIComponent(activeSessionId)}/prompt_async`
+          : `/session/${encodeURIComponent(activeSessionId)}/message`;
+      const response = await callControl({
+        path,
+        method: 'POST',
+        body: {
+          parts: [{ type: 'text', text: quickPrompt.trim() }]
+        }
+      });
+      setOperationResult(response);
+      if (!response.ok) {
+        throw new Error(response.text || 'OpenCode prompt failed.');
+      }
+
+      setQuickPrompt('');
+      await Promise.all([
+        refreshMonitor({ silent: true }),
+        refreshSessionDetail(activeSessionId, { silent: true })
+      ]);
+      setEngineState('ready');
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Prompt submission failed.');
+      setEngineState('error');
+    } finally {
+      setIsOperationRunning(false);
+    }
+  };
+
+  const handleRunSessionOperation = async () => {
+    if (!selectedOperation || !activeSessionId) return;
+    setIsOperationRunning(true);
+    setOperationError(null);
+    setEngineState('booting');
+
+    try {
+      let parsedBody: unknown = undefined;
+      const bodyText = sessionOperationBody.trim();
+      if (bodyText) {
+        parsedBody = JSON.parse(bodyText) as unknown;
+      } else if (selectedOperation.requiresBody) {
+        parsedBody = {};
+      }
+
+      const response = await callControl({
+        path: resolveSessionPath(selectedOperation.path, activeSessionId),
+        method: selectedOperation.method,
+        body: parsedBody
+      });
+      setOperationResult(response);
+      if (!response.ok) {
+        throw new Error(response.text || `${selectedOperation.label} failed.`);
+      }
+
+      if (selectedOperation.id === 'session-delete') {
+        setActiveSessionId(null);
+        setSessionDetail(null);
+      }
+
+      await refreshMonitor({ silent: true });
+      if (activeSessionId && selectedOperation.id !== 'session-delete') {
+        await refreshSessionDetail(activeSessionId, { silent: true });
+      }
+      setEngineState('ready');
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Session operation failed.');
+      setEngineState('error');
+    } finally {
+      setIsOperationRunning(false);
+    }
+  };
+
+  const handlePermissionReply = async (requestId: string, reply: 'once' | 'always' | 'reject') => {
+    setIsOperationRunning(true);
+    setOperationError(null);
+    setEngineState('booting');
+    try {
+      const message = permissionMessages[requestId]?.trim();
+      const body: Record<string, unknown> = { reply };
+      if (message) body.message = message;
+
+      const response = await callControl({
+        path: `/permission/${encodeURIComponent(requestId)}/reply`,
+        method: 'POST',
+        body
+      });
+      setOperationResult(response);
+      if (!response.ok) {
+        throw new Error(response.text || `Permission response failed for ${requestId}.`);
+      }
+
+      await refreshMonitor({ silent: true });
+      if (activeSessionId) await refreshSessionDetail(activeSessionId, { silent: true });
+      setEngineState('ready');
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Permission response failed.');
+      setEngineState('error');
+    } finally {
+      setIsOperationRunning(false);
+    }
+  };
+
+  const handleQuestionReply = async (requestId: string) => {
+    setIsOperationRunning(true);
+    setOperationError(null);
+    setEngineState('booting');
+    try {
+      const text = questionReplies[requestId]?.trim() || '{"answers": []}';
+      const body = JSON.parse(text) as unknown;
+      const response = await callControl({
+        path: `/question/${encodeURIComponent(requestId)}/reply`,
+        method: 'POST',
+        body
+      });
+      setOperationResult(response);
+      if (!response.ok) {
+        throw new Error(response.text || `Question reply failed for ${requestId}.`);
+      }
+      await refreshMonitor({ silent: true });
+      if (activeSessionId) await refreshSessionDetail(activeSessionId, { silent: true });
+      setEngineState('ready');
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Question reply failed.');
+      setEngineState('error');
+    } finally {
+      setIsOperationRunning(false);
+    }
+  };
+
+  const handleQuestionReject = async (requestId: string) => {
+    setIsOperationRunning(true);
+    setOperationError(null);
+    setEngineState('booting');
+    try {
+      const response = await callControl({
+        path: `/question/${encodeURIComponent(requestId)}/reject`,
+        method: 'POST'
+      });
+      setOperationResult(response);
+      if (!response.ok) {
+        throw new Error(response.text || `Question rejection failed for ${requestId}.`);
+      }
+      await refreshMonitor({ silent: true });
+      if (activeSessionId) await refreshSessionDetail(activeSessionId, { silent: true });
+      setEngineState('ready');
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Question rejection failed.');
+      setEngineState('error');
+    } finally {
+      setIsOperationRunning(false);
+    }
+  };
+
+  const handleTuiShortcut = async (path: string) => {
+    setIsOperationRunning(true);
+    setOperationError(null);
+    setEngineState('booting');
+    try {
+      const response = await callControl({
+        path,
+        method: 'POST'
+      });
+      setOperationResult(response);
+      if (!response.ok) {
+        throw new Error(response.text || `TUI shortcut failed (${path}).`);
+      }
+      await refreshMonitor({ silent: true });
+      setEngineState('ready');
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'TUI shortcut failed.');
+      setEngineState('error');
+    } finally {
+      setIsOperationRunning(false);
+    }
+  };
+
+  const handleTuiCommand = async () => {
+    setIsOperationRunning(true);
+    setOperationError(null);
+    setEngineState('booting');
+    try {
+      const response = await callControl({
+        path: '/tui/execute-command',
+        method: 'POST',
+        body: {
+          command: tuiCommand
+        }
+      });
+      setOperationResult(response);
+      if (!response.ok) {
+        throw new Error(response.text || `TUI command failed (${tuiCommand}).`);
+      }
+      await refreshMonitor({ silent: true });
+      setEngineState('ready');
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'TUI command failed.');
+      setEngineState('error');
+    } finally {
+      setIsOperationRunning(false);
+    }
+  };
+
+  const handleRunApiRequest = async () => {
+    setIsApiRunning(true);
+    setApiError(null);
+    setEngineState('booting');
+
+    try {
+      let parsedBody: unknown = undefined;
+      const bodyText = apiBody.trim();
+      if (bodyText && apiMethod !== 'GET') {
+        parsedBody = JSON.parse(bodyText) as unknown;
+      } else if ((apiMethod === 'POST' || apiMethod === 'PATCH' || apiMethod === 'PUT') && !bodyText) {
+        parsedBody = {};
+      }
+
+      const response = await callControl({
+        path: apiPath,
+        method: apiMethod,
+        body: parsedBody
+      });
+
+      setApiResponse(response);
+      if (!response.ok) {
+        setApiError(response.text || `Request failed (${response.status}).`);
+        setEngineState('error');
+      } else {
+        setEngineState('ready');
+      }
+
+      await refreshMonitor({ silent: true });
+      if (activeSessionId) await refreshSessionDetail(activeSessionId, { silent: true });
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'API request failed.');
+      setEngineState('error');
+    } finally {
+      setIsApiRunning(false);
+    }
+  };
+
   return (
     <div className="oc-app min-h-screen" style={themeStyle}>
-      <div className="mx-auto w-full max-w-[1460px] px-4 py-5 md:px-6 md:py-7">
+      <div className="mx-auto w-full max-w-[1540px] px-4 py-5 md:px-6 md:py-7">
         <Card className="oc-panel relative overflow-hidden">
           <div className="oc-header-glow" />
           <CardHeader className="relative z-10 space-y-4 p-5 md:p-6">
@@ -836,14 +1370,14 @@ export default function ResearchPage() {
               <div className="space-y-2">
                 <p className="oc-kicker flex items-center gap-2">
                   <Palette className="h-3.5 w-3.5" />
-                  OpenCode Research Deck
+                  OpenCode Control Plane
                 </p>
                 <h1 className="text-2xl font-semibold tracking-tight text-[var(--text-strong)] md:text-4xl">
-                  Local Query Workbench
+                  Full OpenCode Monitor
                 </h1>
                 <p className="max-w-3xl text-[13px] text-[var(--text-weak)] md:text-[14px]">
-                  Rebuilt from scratch with an OpenCode-style theme system and shadcn-inspired primitives. Queries
-                  still run locally and auto-start OpenCode when needed.
+                  Session control, approvals, TUI commands, and raw API execution are all surfaced in one local-first
+                  dashboard.
                 </p>
               </div>
 
@@ -905,66 +1439,32 @@ export default function ResearchPage() {
               <Badge>Theme: {activeTheme.name}</Badge>
               <Badge>Resolved: {resolvedScheme}</Badge>
               {engine?.startedAt && <Badge>Started {formatRelativeTime(engine.startedAt)}</Badge>}
+              <Badge>{sessions.length} sessions</Badge>
+              <Badge>{permissions.length} permissions</Badge>
+              <Badge>{questions.length} questions</Badge>
             </div>
           </CardHeader>
         </Card>
 
-        <div className="mt-4 grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+        <div className="mt-4 grid gap-4 xl:grid-cols-[390px_minmax(0,1fr)]">
           <aside className="space-y-4">
             <Card className="oc-panel">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Search className="h-4 w-4 text-[var(--accent)]" />
-                  Research Prompt
-                </CardTitle>
-                <CardDescription>Dispatches to `POST /api/query` and auto-starts OpenCode on demand.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form className="space-y-3" onSubmit={handleSubmit}>
-                  <Textarea
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Ask a research question..."
-                    className="h-36 resize-none"
-                  />
-
-                  <div className="flex flex-wrap gap-2">
-                    {QUERY_PRESETS.map((preset) => (
-                      <Button
-                        key={preset}
-                        variant="ghost"
-                        size="sm"
-                        className="h-auto max-w-full justify-start whitespace-normal px-2.5 py-1.5 text-left leading-4"
-                        onClick={() => setQuery(preset)}
-                      >
-                        {preset}
-                      </Button>
-                    ))}
-                  </div>
-
-                  <Button type="submit" variant="default" className="w-full" disabled={!query.trim() || isProcessing}>
-                    {isProcessing ? (
-                      <>
-                        <LoaderCircle className="h-4 w-4 animate-spin" />
-                        Running Research...
-                      </>
-                    ) : (
-                      <>
-                        <SendHorizontal className="h-4 w-4" />
-                        Start Research
-                      </>
-                    )}
+              <CardHeader className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <Server className="h-4 w-4 text-[var(--accent)]" />
+                    Engine Snapshot
+                  </CardTitle>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleRefresh}
+                    disabled={isMonitorLoading || isSessionDetailLoading}
+                  >
+                    <RefreshCw className={cn('h-3.5 w-3.5', (isMonitorLoading || isSessionDetailLoading) && 'animate-spin')} />
+                    Refresh
                   </Button>
-                </form>
-              </CardContent>
-            </Card>
-
-            <Card className="oc-panel">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Server className="h-4 w-4 text-[var(--accent)]" />
-                  Engine & Runtime
-                </CardTitle>
+                </div>
               </CardHeader>
               <CardContent className="space-y-3 text-[12px]">
                 <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
@@ -973,25 +1473,46 @@ export default function ResearchPage() {
                     {engine ? `${engine.host}:${engine.port}` : '127.0.0.1:4096'}
                   </p>
                 </div>
+
                 <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
                   <p className="oc-kicker">Startup Command</p>
                   <p className="oc-mono mt-1 break-all text-[12px] text-[var(--text-base)]">
                     {engine?.command || 'opencode serve --hostname 127.0.0.1 --port 4096'}
                   </p>
                 </div>
-                <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
-                  <p className="oc-kicker">Tracked Sessions</p>
-                  <p className="oc-mono mt-1 text-[12px] text-[var(--text-strong)]">{sessionList?.count ?? 0}</p>
+
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-2.5">
+                    <p className="oc-kicker">OpenAPI</p>
+                    <p className="oc-mono mt-1 text-[var(--text-strong)]">
+                      {monitor?.openapi?.endpointCount ?? 0} endpoints
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-2.5">
+                    <p className="oc-kicker">Source</p>
+                    <p className="oc-mono mt-1 text-[var(--text-strong)]">{monitor?.openapi?.source ?? 'unknown'}</p>
+                  </div>
                 </div>
 
-                {(statusError || engine?.lastError) && (
+                {(monitorError || engine?.lastError) && (
                   <div className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-3 text-[var(--critical)]">
                     <p className="mb-1 flex items-center gap-1.5 font-medium">
                       <AlertCircle className="h-3.5 w-3.5" />
-                      Engine Error
+                      Monitor Error
                     </p>
-                    <p className="text-[12px]">{statusError || engine?.lastError}</p>
+                    <p className="text-[12px]">{monitorError || engine?.lastError}</p>
                   </div>
+                )}
+
+                {monitor?.errors && monitor.errors.length > 0 && (
+                  <details className="rounded-lg border border-[var(--warning-border)] bg-[var(--warning-soft)] p-3 text-[var(--warning)]">
+                    <summary className="cursor-pointer text-[12px] font-medium">Optional Endpoint Failures</summary>
+                    <ul className="mt-2 space-y-1 text-[11px]">
+                      {monitor.errors.map((error) => (
+                        <li key={error}>{error}</li>
+                      ))}
+                    </ul>
+                  </details>
                 )}
 
                 {engine?.recentLogs && engine.recentLogs.length > 0 && (
@@ -1005,29 +1526,290 @@ export default function ResearchPage() {
               </CardContent>
             </Card>
 
-            {history.length > 0 && (
-              <Card className="oc-panel">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <History className="h-4 w-4 text-[var(--accent)]" />
-                    Recent Queries
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="flex flex-wrap gap-2">
-                  {history.map((entry) => (
-                    <Button
-                      key={entry}
-                      variant="secondary"
-                      size="sm"
-                      className="h-auto max-w-full whitespace-normal px-2.5 py-1.5 text-left leading-4"
-                      onClick={() => setQuery(entry)}
+            <Card className="oc-panel">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <SendHorizontal className="h-4 w-4 text-[var(--accent)]" />
+                  Session Controls
+                </CardTitle>
+                <CardDescription>Create sessions and dispatch prompts like the TUI.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-2">
+                  <Input
+                    value={newSessionTitle}
+                    onChange={(event) => setNewSessionTitle(event.target.value)}
+                    placeholder="New session title (optional)"
+                  />
+                  <Input
+                    value={newSessionParent}
+                    onChange={(event) => setNewSessionParent(event.target.value)}
+                    placeholder="Parent session id (optional)"
+                  />
+                  <Button
+                    variant="default"
+                    className="w-full"
+                    onClick={handleCreateSession}
+                    disabled={isOperationRunning}
+                  >
+                    {isOperationRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                    Create Session
+                  </Button>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-2">
+                  <Textarea
+                    value={quickPrompt}
+                    onChange={(event) => setQuickPrompt(event.target.value)}
+                    placeholder={activeSessionId ? 'Prompt selected session...' : 'Select a session to prompt'}
+                    className="h-28 resize-none"
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <select
+                      value={quickPromptMode}
+                      onChange={(event) => setQuickPromptMode(event.target.value as 'sync' | 'async')}
+                      className="h-9 rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
                     >
-                      {entry}
+                      <option value="sync">Sync Prompt</option>
+                      <option value="async">Async Prompt</option>
+                    </select>
+                    <Button
+                      variant="secondary"
+                      onClick={handleSendPrompt}
+                      disabled={!activeSessionId || !quickPrompt.trim() || isOperationRunning}
+                    >
+                      {isOperationRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+                      Send
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Activity className="h-4 w-4 text-[var(--accent)]" />
+                  Session Operation Runner
+                </CardTitle>
+                <CardDescription>Run any high-impact session mutation with custom JSON payload.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <select
+                  value={sessionOperationId}
+                  onChange={(event) => setSessionOperationId(event.target.value)}
+                  className="h-9 w-full rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                >
+                  {SESSION_OPERATION_DEFINITIONS.map((operation) => (
+                    <option key={operation.id} value={operation.id}>
+                      {operation.label}
+                    </option>
+                  ))}
+                </select>
+
+                <Textarea
+                  value={sessionOperationBody}
+                  onChange={(event) => setSessionOperationBody(event.target.value)}
+                  className="oc-mono h-40 resize-none text-[11px]"
+                  placeholder="JSON request body"
+                />
+
+                <Button
+                  variant="default"
+                  className="w-full"
+                  onClick={handleRunSessionOperation}
+                  disabled={!activeSessionId || !selectedOperation || isOperationRunning}
+                >
+                  {isOperationRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <MonitorCog className="h-4 w-4" />}
+                  Run Operation
+                </Button>
+
+                {operationError && (
+                  <div className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-3 text-[12px] text-[var(--critical)]">
+                    {operationError}
+                  </div>
+                )}
+
+                {operationResult && (
+                  <details className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                    <summary className="cursor-pointer text-[12px] font-medium text-[var(--text-strong)]">
+                      Last result: {operationResult.status} {operationResult.ok ? 'ok' : 'error'}
+                    </summary>
+                    <pre className="oc-scroll oc-mono mt-2 max-h-44 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                      {prettyJson(operationResult.data ?? operationResult.text)}
+                    </pre>
+                  </details>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-[var(--warning)]" />
+                  Permission Queue
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {permissions.length === 0 && (
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] px-3 py-4 text-[12px] text-[var(--text-weak)]">
+                    No pending permissions.
+                  </div>
+                )}
+
+                {permissions.map((request, index) => {
+                  const requestId = extractIdentifier(request) || `permission-${index + 1}`;
+                  return (
+                    <div key={requestId} className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                      <p className="oc-mono text-[11px] text-[var(--text-weak)]">{requestId}</p>
+                      <Input
+                        value={permissionMessages[requestId] || ''}
+                        onChange={(event) =>
+                          setPermissionMessages((prev) => ({ ...prev, [requestId]: event.target.value }))
+                        }
+                        placeholder="Optional message"
+                        className="mt-2"
+                      />
+                      <div className="mt-2 grid grid-cols-3 gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={isOperationRunning}
+                          onClick={() => void handlePermissionReply(requestId, 'once')}
+                        >
+                          once
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={isOperationRunning}
+                          onClick={() => void handlePermissionReply(requestId, 'always')}
+                        >
+                          always
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={isOperationRunning}
+                          onClick={() => void handlePermissionReply(requestId, 'reject')}
+                        >
+                          reject
+                        </Button>
+                      </div>
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-[11px] text-[var(--text-weaker)]">payload</summary>
+                        <pre className="oc-scroll oc-mono mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                          {prettyJson(request)}
+                        </pre>
+                      </details>
+                    </div>
+                  );
+                })}
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-[var(--warning)]" />
+                  Question Queue
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {questions.length === 0 && (
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] px-3 py-4 text-[12px] text-[var(--text-weak)]">
+                    No pending questions.
+                  </div>
+                )}
+
+                {questions.map((request, index) => {
+                  const requestId = extractIdentifier(request) || `question-${index + 1}`;
+                  return (
+                    <div key={requestId} className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                      <p className="oc-mono text-[11px] text-[var(--text-weak)]">{requestId}</p>
+                      <Textarea
+                        value={questionReplies[requestId] || '{"answers": []}'}
+                        onChange={(event) =>
+                          setQuestionReplies((prev) => ({
+                            ...prev,
+                            [requestId]: event.target.value
+                          }))
+                        }
+                        className="oc-mono mt-2 h-24 resize-none text-[11px]"
+                      />
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={isOperationRunning}
+                          onClick={() => void handleQuestionReply(requestId)}
+                        >
+                          reply
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={isOperationRunning}
+                          onClick={() => void handleQuestionReject(requestId)}
+                        >
+                          reject
+                        </Button>
+                      </div>
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-[11px] text-[var(--text-weaker)]">payload</summary>
+                        <pre className="oc-scroll oc-mono mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                          {prettyJson(request)}
+                        </pre>
+                      </details>
+                    </div>
+                  );
+                })}
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <MonitorCog className="h-4 w-4 text-[var(--accent)]" />
+                  TUI Controls
+                </CardTitle>
+                <CardDescription>Trigger TUI-level actions through OpenCode `/tui/*` endpoints.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  {TUI_SHORTCUTS.map((shortcut) => (
+                    <Button
+                      key={shortcut.path}
+                      size="sm"
+                      variant="secondary"
+                      disabled={isOperationRunning}
+                      onClick={() => void handleTuiShortcut(shortcut.path)}
+                    >
+                      {shortcut.label}
                     </Button>
                   ))}
-                </CardContent>
-              </Card>
-            )}
+                </div>
+
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <select
+                    value={tuiCommand}
+                    onChange={(event) => setTuiCommand(event.target.value)}
+                    className="h-9 rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                  >
+                    {TUI_COMMAND_CHOICES.map((command) => (
+                      <option key={command} value={command}>
+                        {command}
+                      </option>
+                    ))}
+                  </select>
+                  <Button size="sm" variant="default" disabled={isOperationRunning} onClick={handleTuiCommand}>
+                    execute
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
           </aside>
 
           <section className="space-y-4">
@@ -1036,133 +1818,18 @@ export default function ResearchPage() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <CardTitle className="flex items-center gap-2">
                     <Activity className="h-4 w-4 text-[var(--accent)]" />
-                    Research Results
-                  </CardTitle>
-                  <div className="flex items-center gap-2">
-                    <Badge>{results.length} cached</Badge>
-                    {isProcessing && <Badge variant="warning">Processing</Badge>}
-                  </div>
-                </div>
-                <Separator />
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {queryError && (
-                  <div className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-3 text-[13px] text-[var(--critical)]">
-                    <p className="flex items-center gap-1.5 font-medium">
-                      <AlertCircle className="h-4 w-4" />
-                      Query Failed
-                    </p>
-                    <p className="mt-1 text-[12px]">{queryError}</p>
-                  </div>
-                )}
-
-                {!isProcessing && results.length === 0 && (
-                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] px-5 py-10 text-center">
-                    <p className="text-[15px] font-medium text-[var(--text-strong)]">No completed query yet</p>
-                    <p className="mt-1 text-[12px] text-[var(--text-weak)]">
-                      Submit a prompt to start OpenCode locally and get a structured answer.
-                    </p>
-                  </div>
-                )}
-
-                {isProcessing && (
-                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] px-5 py-10 text-center">
-                    <LoaderCircle className="mx-auto h-8 w-8 animate-spin text-[var(--accent)]" />
-                    <p className="mt-3 text-[14px] text-[var(--text-strong)]">Running local research pipeline...</p>
-                    <p className="mt-1 text-[12px] text-[var(--text-weak)]">Booting OpenCode and streaming query results.</p>
-                  </div>
-                )}
-
-                {results.map((result) => (
-                  <article
-                    key={result.id}
-                    className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-4 shadow-[var(--shadow-xs-border)]"
-                  >
-                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                      <p className="oc-mono text-[11px] text-[var(--text-weak)]">{result.id}</p>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Badge>{formatDateTime(result.timestamp)}</Badge>
-                        <Badge>{result.status}</Badge>
-                        {result.sessionId && <Badge>Session {result.sessionId}</Badge>}
-                      </div>
-                    </div>
-
-                    <p className="text-[13px] text-[var(--text-strong)]">{result.query}</p>
-
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                      <Badge className="justify-center gap-1.5 py-1.5">
-                        <Database className="h-3.5 w-3.5" />
-                        {result.metadata.sources} sources
-                      </Badge>
-                      <Badge className="justify-center gap-1.5 py-1.5">
-                        <Clock3 className="h-3.5 w-3.5" />
-                        {result.metadata.processingTime}s runtime
-                      </Badge>
-                      <Badge className="justify-center gap-1.5 py-1.5">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        {result.metadata.confidenceScore}% confidence
-                      </Badge>
-                      <Badge className="justify-center gap-1.5 py-1.5">
-                        <Server className="h-3.5 w-3.5" />
-                        {result.metadata.opencode?.started ? 'Engine started now' : 'Engine already running'}
-                      </Badge>
-                    </div>
-
-                    <div className="mt-3 rounded-lg border border-[var(--border-weak)] bg-[var(--surface-raised)] p-3">
-                      <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--text-base)]">
-                        {result.answer || 'No answer text returned by OpenCode.'}
-                      </p>
-                    </div>
-
-                    {result.sources && result.sources.length > 0 && (
-                      <div className="mt-3 space-y-2">
-                        <p className="oc-kicker">Detected Sources</p>
-                        {result.sources.map((source) => (
-                          <a
-                            key={source}
-                            href={source}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="flex items-center gap-2 rounded-md border border-[var(--border-weak)] bg-[var(--surface-raised)] px-3 py-2 text-[12px] text-[var(--text-base)] transition-colors hover:bg-[var(--surface-hover)]"
-                          >
-                            <ExternalLink className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
-                            <span className="break-all">{source}</span>
-                          </a>
-                        ))}
-                      </div>
-                    )}
-                  </article>
-                ))}
-              </CardContent>
-            </Card>
-
-            <Card className="oc-panel">
-              <CardHeader className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <CardTitle className="flex items-center gap-2">
-                    <Activity className="h-4 w-4 text-[var(--accent)]" />
                     Session Monitor
                   </CardTitle>
                   <div className="flex items-center gap-2">
-                    <Badge>{sessionList?.count ?? 0} sessions</Badge>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={handleSessionRefresh}
-                      disabled={isSessionListLoading || isSessionDetailLoading}
-                    >
-                      <RefreshCw
-                        className={cn('h-3.5 w-3.5', (isSessionListLoading || isSessionDetailLoading) && 'animate-spin')}
-                      />
-                      Refresh
-                    </Button>
+                    <Badge>{sessions.length} sessions</Badge>
+                    <Badge>{sessionDetail?.messageCount ?? 0} messages</Badge>
+                    {isSessionDetailLoading && <Badge>loading</Badge>}
                   </div>
                 </div>
-
                 <Input
                   value={sessionSearch}
                   onChange={(event) => setSessionSearch(event.target.value)}
-                  placeholder="Filter sessions by title or id..."
+                  placeholder="Filter sessions by title, id, directory..."
                 />
               </CardHeader>
               <CardContent>
@@ -1170,62 +1837,67 @@ export default function ResearchPage() {
                   <div className="mb-3 rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-3 text-[12px] text-[var(--critical)]">
                     <p className="flex items-center gap-1.5 font-medium">
                       <AlertCircle className="h-3.5 w-3.5" />
-                      Session Monitor Error
+                      Session Error
                     </p>
                     <p className="mt-1">{sessionError}</p>
                   </div>
                 )}
 
-                <div className="grid gap-3 lg:grid-cols-[320px_minmax(0,1fr)]">
-                  <div className="oc-scroll max-h-[460px] space-y-2 overflow-y-auto">
-                    {isSessionListLoading && sessions.length === 0 && (
+                <div className="grid gap-3 lg:grid-cols-[340px_minmax(0,1fr)]">
+                  <div className="oc-scroll max-h-[600px] space-y-2 overflow-y-auto">
+                    {isMonitorLoading && sessions.length === 0 && (
                       <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] px-3 py-4 text-center text-[12px] text-[var(--text-weak)]">
                         Loading sessions...
                       </div>
                     )}
 
-                    {!isSessionListLoading && filteredSessions.length === 0 && (
+                    {!isMonitorLoading && filteredSessions.length === 0 && (
                       <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] px-3 py-4 text-center text-[12px] text-[var(--text-weak)]">
                         No matching sessions.
                       </div>
                     )}
 
-                    {filteredSessions.map((session) => (
-                      <button
-                        key={session.id}
-                        type="button"
-                        onClick={() => setActiveSessionId(session.id)}
-                        className={cn(
-                          'w-full rounded-lg border p-3 text-left transition-colors',
-                          activeSessionId === session.id
-                            ? 'border-[var(--border-selected)] bg-[var(--accent-soft)]'
-                            : 'border-[var(--border-weak)] bg-[var(--surface-base)] hover:bg-[var(--surface-hover)]'
-                        )}
-                      >
-                        <p className="line-clamp-2 text-[13px] font-medium text-[var(--text-strong)]">{session.title}</p>
-                        <p className="oc-mono mt-1 text-[11px] text-[var(--text-weak)]">{session.id}</p>
-                        <p className="mt-2 text-[11px] text-[var(--text-weaker)]">
-                          Updated {formatRelativeTime(session.updatedAt || session.createdAt)}
-                        </p>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          <Badge>{session.filesChanged} files</Badge>
-                          <Badge>
-                            +{session.additions} / -{session.deletions}
-                          </Badge>
-                        </div>
-                      </button>
-                    ))}
+                    {filteredSessions.map((session) => {
+                      const statusRecord = asRecord(monitor?.sessionStatus?.[session.id]);
+                      const statusType = statusRecord ? extractString(statusRecord, ['type', 'status']) : null;
+                      return (
+                        <button
+                          key={session.id}
+                          type="button"
+                          onClick={() => setActiveSessionId(session.id)}
+                          className={cn(
+                            'w-full rounded-lg border p-3 text-left transition-colors',
+                            activeSessionId === session.id
+                              ? 'border-[var(--border-selected)] bg-[var(--accent-soft)]'
+                              : 'border-[var(--border-weak)] bg-[var(--surface-base)] hover:bg-[var(--surface-hover)]'
+                          )}
+                        >
+                          <p className="line-clamp-2 text-[13px] font-medium text-[var(--text-strong)]">{session.title}</p>
+                          <p className="oc-mono mt-1 text-[11px] text-[var(--text-weak)]">{session.id}</p>
+                          <p className="mt-1 text-[11px] text-[var(--text-weaker)]">
+                            Updated {formatRelativeTime(session.updatedAt || session.createdAt)}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            <Badge>{session.filesChanged} files</Badge>
+                            <Badge>
+                              +{session.additions} / -{session.deletions}
+                            </Badge>
+                            {statusType && <Badge>{statusType}</Badge>}
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
 
                   <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
                     {!activeSessionId && (
-                      <div className="flex min-h-[280px] items-center justify-center text-[12px] text-[var(--text-weak)]">
-                        Select a session to inspect message activity.
+                      <div className="flex min-h-[320px] items-center justify-center text-[12px] text-[var(--text-weak)]">
+                        Select a session to inspect activity.
                       </div>
                     )}
 
                     {activeSessionId && isSessionDetailLoading && !sessionDetail && (
-                      <div className="flex min-h-[280px] items-center justify-center gap-2 text-[12px] text-[var(--text-weak)]">
+                      <div className="flex min-h-[320px] items-center justify-center gap-2 text-[12px] text-[var(--text-weak)]">
                         <LoaderCircle className="h-4 w-4 animate-spin" />
                         Loading session detail...
                       </div>
@@ -1249,7 +1921,7 @@ export default function ResearchPage() {
                           )}
                         </div>
 
-                        <div className="oc-scroll max-h-[360px] space-y-2 overflow-y-auto">
+                        <div className="oc-scroll max-h-[460px] space-y-2 overflow-y-auto">
                           {sessionDetail.messages.length === 0 && (
                             <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-raised)] px-3 py-4 text-center text-[12px] text-[var(--text-weak)]">
                               No messages found for this session.
@@ -1286,6 +1958,17 @@ export default function ResearchPage() {
                                   parts: {message.partTypes.join(', ')}
                                 </p>
                               )}
+
+                              {message.parts.length > 0 && (
+                                <details className="mt-2">
+                                  <summary className="cursor-pointer text-[11px] text-[var(--text-weaker)]">
+                                    raw parts ({message.parts.length})
+                                  </summary>
+                                  <pre className="oc-scroll oc-mono mt-1 max-h-44 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                                    {prettyJson(message.parts)}
+                                  </pre>
+                                </details>
+                              )}
                             </article>
                           ))}
                         </div>
@@ -1293,6 +1976,79 @@ export default function ResearchPage() {
                     )}
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <Database className="h-4 w-4 text-[var(--accent)]" />
+                    OpenCode API Explorer
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Badge>{monitor?.openapi?.title || 'OpenCode API'}</Badge>
+                    <Badge>v{monitor?.openapi?.version || 'unknown'}</Badge>
+                  </div>
+                </div>
+                <div className="grid gap-2 md:grid-cols-[1fr_120px]">
+                  <select
+                    value={apiPath}
+                    onChange={(event) => setApiPath(event.target.value)}
+                    className="h-9 rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                  >
+                    {openApiEndpoints.map((endpoint) => (
+                      <option key={endpoint.path} value={endpoint.path}>
+                        {endpoint.path}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={apiMethod}
+                    onChange={(event) => setApiMethod(event.target.value as OpenCodeHttpMethod)}
+                    className="h-9 rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                  >
+                    {selectedApiMethods.map((method) => (
+                      <option key={method} value={method}>
+                        {method}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {selectedEndpoint && selectedEndpoint.operationIds.length > 0 && (
+                  <p className="oc-mono text-[11px] text-[var(--text-weaker)]">
+                    operations: {selectedEndpoint.operationIds.join(', ')}
+                  </p>
+                )}
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Textarea
+                  value={apiBody}
+                  onChange={(event) => setApiBody(event.target.value)}
+                  className="oc-mono h-40 resize-none text-[11px]"
+                  placeholder="Request body JSON (optional)"
+                />
+                <Button variant="default" onClick={handleRunApiRequest} disabled={isApiRunning}>
+                  {isApiRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                  Run Request
+                </Button>
+
+                {apiError && (
+                  <div className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-3 text-[12px] text-[var(--critical)]">
+                    {apiError}
+                  </div>
+                )}
+
+                {apiResponse && (
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                    <p className="oc-mono text-[11px] text-[var(--text-weak)]">
+                      status {apiResponse.status} · {apiResponse.ok ? 'ok' : 'error'} · {apiResponse.contentType || 'unknown content'}
+                    </p>
+                    <pre className="oc-scroll oc-mono mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                      {prettyJson(apiResponse.data ?? apiResponse.text)}
+                    </pre>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </section>

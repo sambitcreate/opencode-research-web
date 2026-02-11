@@ -19,6 +19,135 @@ type OpenCodeManager = {
   logs: string[];
 };
 
+const DEFAULT_OPENAPI_ENDPOINTS = [
+  '/global/health',
+  '/global/event',
+  '/global/config',
+  '/global/dispose',
+  '/auth/{providerID}',
+  '/project',
+  '/project/current',
+  '/project/{projectID}',
+  '/pty',
+  '/pty/{ptyID}',
+  '/pty/{ptyID}/connect',
+  '/config',
+  '/config/providers',
+  '/experimental/tool/ids',
+  '/experimental/tool',
+  '/experimental/worktree',
+  '/experimental/worktree/reset',
+  '/experimental/resource',
+  '/session',
+  '/session/status',
+  '/session/{sessionID}',
+  '/session/{sessionID}/children',
+  '/session/{sessionID}/todo',
+  '/session/{sessionID}/init',
+  '/session/{sessionID}/fork',
+  '/session/{sessionID}/abort',
+  '/session/{sessionID}/share',
+  '/session/{sessionID}/diff',
+  '/session/{sessionID}/summarize',
+  '/session/{sessionID}/message',
+  '/session/{sessionID}/message/{messageID}',
+  '/session/{sessionID}/message/{messageID}/part/{partID}',
+  '/session/{sessionID}/prompt_async',
+  '/session/{sessionID}/command',
+  '/session/{sessionID}/shell',
+  '/session/{sessionID}/revert',
+  '/session/{sessionID}/unrevert',
+  '/session/{sessionID}/permissions/{permissionID}',
+  '/permission/{requestID}/reply',
+  '/permission',
+  '/question',
+  '/question/{requestID}/reply',
+  '/question/{requestID}/reject',
+  '/provider',
+  '/provider/auth',
+  '/provider/{providerID}/oauth/authorize',
+  '/provider/{providerID}/oauth/callback',
+  '/find',
+  '/find/file',
+  '/find/symbol',
+  '/file',
+  '/file/content',
+  '/file/status',
+  '/mcp',
+  '/mcp/{name}/auth',
+  '/mcp/{name}/auth/callback',
+  '/mcp/{name}/auth/authenticate',
+  '/mcp/{name}/connect',
+  '/mcp/{name}/disconnect',
+  '/tui/append-prompt',
+  '/tui/open-help',
+  '/tui/open-sessions',
+  '/tui/open-themes',
+  '/tui/open-models',
+  '/tui/submit-prompt',
+  '/tui/clear-prompt',
+  '/tui/execute-command',
+  '/tui/show-toast',
+  '/tui/publish',
+  '/tui/select-session',
+  '/tui/control/next',
+  '/tui/control/response',
+  '/instance/dispose',
+  '/path',
+  '/vcs',
+  '/command',
+  '/log',
+  '/agent',
+  '/skill',
+  '/lsp',
+  '/formatter',
+  '/event'
+] as const;
+
+export type OpenCodeHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+export type OpenCodeEndpointDefinition = {
+  path: string;
+  methods: OpenCodeHttpMethod[];
+  operationIds: string[];
+};
+
+export type OpenCodeInvocationResult = {
+  ok: boolean;
+  status: number;
+  contentType: string;
+  data: unknown;
+  text: string;
+};
+
+export type OpenCodeOpenApiSnapshot = {
+  source: 'live' | 'fallback';
+  title: string;
+  version: string;
+  endpointCount: number;
+  endpoints: OpenCodeEndpointDefinition[];
+};
+
+export type OpenCodePermissionRequest = Record<string, unknown>;
+export type OpenCodeQuestionRequest = Record<string, unknown>;
+export type OpenCodeSessionStatusMap = Record<string, unknown>;
+
+export type OpenCodeMonitorSnapshot = {
+  status: OpenCodeStatus;
+  sessions: OpenCodeSessionList;
+  sessionStatus: OpenCodeSessionStatusMap;
+  permissions: OpenCodePermissionRequest[];
+  questions: OpenCodeQuestionRequest[];
+  providers: unknown;
+  commands: unknown;
+  agents: unknown;
+  skills: unknown;
+  pathInfo: unknown;
+  vcsInfo: unknown;
+  openapi: OpenCodeOpenApiSnapshot;
+  errors: string[];
+};
+
 type ResearchPayload = {
   sessionId: string;
   answer: string;
@@ -65,6 +194,7 @@ export type OpenCodeSessionMessage = {
   text: string;
   partTypes: string[];
   hasRunningToolCall: boolean;
+  parts: JsonRecord[];
 };
 
 export type OpenCodeSessionDetail = {
@@ -340,6 +470,7 @@ function mapSessionMessages(value: unknown): OpenCodeSessionMessage[] {
       const info = asRecord(record.info);
       const messageTime = asRecord(info?.time);
       const parts = asArray(record.parts);
+      const normalizedParts: JsonRecord[] = [];
       const partTypes: string[] = [];
       const textBlocks: string[] = [];
       let hasRunningToolCall = false;
@@ -347,6 +478,7 @@ function mapSessionMessages(value: unknown): OpenCodeSessionMessage[] {
       for (const part of parts) {
         const partRecord = asRecord(part);
         if (!partRecord) continue;
+        normalizedParts.push(partRecord);
 
         const partType = typeof partRecord.type === 'string' ? partRecord.type : null;
         if (partType) partTypes.push(partType);
@@ -383,6 +515,7 @@ function mapSessionMessages(value: unknown): OpenCodeSessionMessage[] {
         text: preview,
         partTypes: uniqueStrings(partTypes),
         hasRunningToolCall,
+        parts: normalizedParts,
         order: index
       };
     })
@@ -405,7 +538,8 @@ function mapSessionMessages(value: unknown): OpenCodeSessionMessage[] {
     createdAt: message.createdAt,
     text: message.text,
     partTypes: message.partTypes,
-    hasRunningToolCall: message.hasRunningToolCall
+    hasRunningToolCall: message.hasRunningToolCall,
+    parts: message.parts
   }));
 }
 
@@ -541,7 +675,21 @@ async function parseResponseBody(response: Response): Promise<{ raw: unknown; te
   }
 }
 
-async function requestOpenCode(path: string, init: RequestInit, timeoutMs = 60_000): Promise<Response> {
+function normalizeApiPath(path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) {
+    throw new Error('OpenCode API path is required.');
+  }
+
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    throw new Error('OpenCode API path must be relative (for example, /session).');
+  }
+
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
+
+async function requestOpenCodeRaw(path: string, init: RequestInit, timeoutMs = 60_000): Promise<Response> {
+  const normalizedPath = normalizeApiPath(path);
   const headers = new Headers(init.headers);
   for (const [key, value] of Object.entries(getAuthHeaders())) {
     if (!headers.has(key)) headers.set(key, value);
@@ -551,11 +699,16 @@ async function requestOpenCode(path: string, init: RequestInit, timeoutMs = 60_0
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetchWithTimeout(`${getBaseUrl()}${path}`, { ...init, headers }, timeoutMs);
+  return fetchWithTimeout(`${getBaseUrl()}${normalizedPath}`, { ...init, headers }, timeoutMs);
+}
+
+async function requestOpenCode(path: string, init: RequestInit, timeoutMs = 60_000): Promise<Response> {
+  const normalizedPath = normalizeApiPath(path);
+  const response = await requestOpenCodeRaw(normalizedPath, init, timeoutMs);
   if (response.ok) return response;
 
   const errorDetails = (await response.text()).slice(0, 900);
-  throw new Error(`OpenCode request failed (${response.status}) on ${path}: ${errorDetails}`);
+  throw new Error(`OpenCode request failed (${response.status}) on ${normalizedPath}: ${errorDetails}`);
 }
 
 export async function ensureOpenCodeServer(): Promise<{
@@ -890,5 +1043,317 @@ export async function getOpenCodeStatus(): Promise<OpenCodeStatus> {
     command: manager.command || buildCommandSpec().display,
     startedAt: manager.startedAt ? new Date(manager.startedAt).toISOString() : null,
     recentLogs: manager.logs.slice(-20)
+  };
+}
+
+function normalizeMethod(method: string | undefined): OpenCodeHttpMethod {
+  const normalized = (method || 'GET').toUpperCase();
+  if (normalized === 'GET' || normalized === 'POST' || normalized === 'PUT' || normalized === 'PATCH' || normalized === 'DELETE') {
+    return normalized;
+  }
+  throw new Error(`Unsupported OpenCode method: ${method}`);
+}
+
+function isOpenCodeMethod(value: string): value is OpenCodeHttpMethod {
+  return value === 'GET' || value === 'POST' || value === 'PUT' || value === 'PATCH' || value === 'DELETE';
+}
+
+function asJsonRecord(value: unknown): JsonRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as JsonRecord;
+}
+
+function fallbackOpenApiSnapshot(): OpenCodeOpenApiSnapshot {
+  return {
+    source: 'fallback',
+    title: 'OpenCode API (fallback)',
+    version: 'unknown',
+    endpointCount: DEFAULT_OPENAPI_ENDPOINTS.length,
+    endpoints: DEFAULT_OPENAPI_ENDPOINTS.map((path) => ({
+      path,
+      methods: [],
+      operationIds: []
+    }))
+  };
+}
+
+function parseOpenApiSnapshot(document: unknown): OpenCodeOpenApiSnapshot | null {
+  const root = asJsonRecord(document);
+  if (!root) return null;
+  const paths = asJsonRecord(root.paths);
+  if (!paths) return null;
+
+  const endpoints: OpenCodeEndpointDefinition[] = [];
+  for (const [path, definition] of Object.entries(paths)) {
+    const operations = asJsonRecord(definition);
+    if (!operations) continue;
+
+    const methods: OpenCodeHttpMethod[] = [];
+    const operationIds: string[] = [];
+
+    for (const [methodKey, operationValue] of Object.entries(operations)) {
+      const upperMethod = methodKey.toUpperCase();
+      if (
+        upperMethod !== 'GET' &&
+        upperMethod !== 'POST' &&
+        upperMethod !== 'PUT' &&
+        upperMethod !== 'PATCH' &&
+        upperMethod !== 'DELETE'
+      ) {
+        continue;
+      }
+
+      methods.push(upperMethod);
+      const operationRecord = asJsonRecord(operationValue);
+      if (typeof operationRecord?.operationId === 'string' && operationRecord.operationId.trim()) {
+        operationIds.push(operationRecord.operationId);
+      }
+    }
+
+    endpoints.push({
+      path,
+      methods: uniqueStrings(methods).filter((method): method is OpenCodeHttpMethod => isOpenCodeMethod(method)),
+      operationIds: uniqueStrings(operationIds)
+    });
+  }
+
+  endpoints.sort((left, right) => left.path.localeCompare(right.path));
+
+  const info = asJsonRecord(root.info);
+  return {
+    source: 'live',
+    title: typeof info?.title === 'string' && info.title.trim() ? info.title : 'OpenCode API',
+    version: typeof info?.version === 'string' && info.version.trim() ? info.version : 'unknown',
+    endpointCount: endpoints.length,
+    endpoints
+  };
+}
+
+export async function invokeOpenCodeEndpoint(input: {
+  path: string;
+  method?: string;
+  body?: unknown;
+  timeoutMs?: number;
+  ensureRunning?: boolean;
+  parseSsePayload?: boolean;
+}): Promise<OpenCodeInvocationResult> {
+  if (input.ensureRunning) {
+    await ensureOpenCodeServer();
+  }
+
+  const method = normalizeMethod(input.method);
+  const hasBody = input.body !== undefined && method !== 'GET';
+  const response = await requestOpenCodeRaw(
+    input.path,
+    {
+      method,
+      body: hasBody ? JSON.stringify(input.body) : undefined
+    },
+    clampInteger(input.timeoutMs, 60_000, 1_000, 300_000)
+  );
+
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('text/event-stream') && input.parseSsePayload !== true) {
+    return {
+      ok: response.ok,
+      status: response.status,
+      contentType,
+      data: null,
+      text: '[event-stream omitted]'
+    };
+  }
+
+  const payload = await parseResponseBody(response);
+  return {
+    ok: response.ok,
+    status: response.status,
+    contentType,
+    data: payload.raw,
+    text: payload.text
+  };
+}
+
+export async function invokeOpenCodeJson<T = unknown>(input: {
+  path: string;
+  method?: string;
+  body?: unknown;
+  timeoutMs?: number;
+  ensureRunning?: boolean;
+}): Promise<T> {
+  const response = await invokeOpenCodeEndpoint(input);
+  if (response.ok) return response.data as T;
+  throw new Error(`OpenCode request failed (${response.status}) on ${input.path}: ${response.text.slice(0, 900)}`);
+}
+
+export async function getOpenCodeOpenApi(options?: {
+  ensureRunning?: boolean;
+}): Promise<OpenCodeOpenApiSnapshot> {
+  const ensureRunning = options?.ensureRunning === true;
+  if (ensureRunning) {
+    await ensureOpenCodeServer();
+  }
+
+  if (!(await isPortOpen(getHost(), getPort()))) {
+    return fallbackOpenApiSnapshot();
+  }
+
+  const candidates = ['/doc', '/openapi.json', '/openapi'];
+  for (const path of candidates) {
+    try {
+      const response = await requestOpenCodeRaw(
+        path,
+        {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json'
+          }
+        },
+        safeParseInt(process.env.OPENCODE_STATUS_TIMEOUT_MS, 25_000)
+      );
+
+      if (!response.ok) continue;
+      const text = await response.text();
+      if (!text.trim()) continue;
+
+      let parsed: unknown = text;
+      try {
+        parsed = JSON.parse(text) as unknown;
+      } catch {
+        continue;
+      }
+
+      const snapshot = parseOpenApiSnapshot(parsed);
+      if (snapshot) return snapshot;
+    } catch {
+      // Keep trying other candidates.
+    }
+  }
+
+  return fallbackOpenApiSnapshot();
+}
+
+export async function getOpenCodeSessionStatusMap(options?: {
+  ensureRunning?: boolean;
+}): Promise<OpenCodeSessionStatusMap> {
+  const ensureRunning = options?.ensureRunning === true;
+  if (ensureRunning) {
+    await ensureOpenCodeServer();
+  }
+  if (!(await isPortOpen(getHost(), getPort()))) return {};
+
+  try {
+    const status = await invokeOpenCodeJson<OpenCodeSessionStatusMap>({
+      path: '/session/status',
+      method: 'GET'
+    });
+    return asJsonRecord(status) ? status : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function getOpenCodePermissions(options?: {
+  ensureRunning?: boolean;
+}): Promise<OpenCodePermissionRequest[]> {
+  const ensureRunning = options?.ensureRunning === true;
+  if (ensureRunning) {
+    await ensureOpenCodeServer();
+  }
+  if (!(await isPortOpen(getHost(), getPort()))) return [];
+
+  try {
+    const payload = await invokeOpenCodeJson<unknown>({
+      path: '/permission',
+      method: 'GET'
+    });
+    return asArray(payload).map((entry) => asJsonRecord(entry)).filter((entry): entry is JsonRecord => entry !== null);
+  } catch {
+    return [];
+  }
+}
+
+export async function getOpenCodeQuestions(options?: {
+  ensureRunning?: boolean;
+}): Promise<OpenCodeQuestionRequest[]> {
+  const ensureRunning = options?.ensureRunning === true;
+  if (ensureRunning) {
+    await ensureOpenCodeServer();
+  }
+  if (!(await isPortOpen(getHost(), getPort()))) return [];
+
+  try {
+    const payload = await invokeOpenCodeJson<unknown>({
+      path: '/question',
+      method: 'GET'
+    });
+    return asArray(payload).map((entry) => asJsonRecord(entry)).filter((entry): entry is JsonRecord => entry !== null);
+  } catch {
+    return [];
+  }
+}
+
+export async function getOpenCodeMonitorSnapshot(options?: {
+  ensureRunning?: boolean;
+  sessionLimit?: number;
+}): Promise<OpenCodeMonitorSnapshot> {
+  const ensureRunning = options?.ensureRunning === true;
+  const sessionLimit = clampInteger(options?.sessionLimit, 80, 1, 200);
+  if (ensureRunning) {
+    await ensureOpenCodeServer();
+  }
+
+  const errors: string[] = [];
+  const [status, sessions, sessionStatus, permissions, questions, providers, commands, agents, skills, pathInfo, vcsInfo, openapi] =
+    await Promise.all([
+      getOpenCodeStatus(),
+      getOpenCodeSessions({ limit: sessionLimit }),
+      getOpenCodeSessionStatusMap(),
+      getOpenCodePermissions(),
+      getOpenCodeQuestions(),
+      invokeOpenCodeEndpoint({ path: '/provider', method: 'GET' }),
+      invokeOpenCodeEndpoint({ path: '/command', method: 'GET' }),
+      invokeOpenCodeEndpoint({ path: '/agent', method: 'GET' }),
+      invokeOpenCodeEndpoint({ path: '/skill', method: 'GET' }),
+      invokeOpenCodeEndpoint({ path: '/path', method: 'GET' }),
+      invokeOpenCodeEndpoint({ path: '/vcs', method: 'GET' }),
+      getOpenCodeOpenApi()
+    ]);
+
+  const providerPayload = providers.ok ? providers.data : null;
+  const commandsPayload = commands.ok ? commands.data : null;
+  const agentsPayload = agents.ok ? agents.data : null;
+  const skillsPayload = skills.ok ? skills.data : null;
+  const pathPayload = pathInfo.ok ? pathInfo.data : null;
+  const vcsPayload = vcsInfo.ok ? vcsInfo.data : null;
+
+  const optionalResponses = [
+    ['/provider', providers],
+    ['/command', commands],
+    ['/agent', agents],
+    ['/skill', skills],
+    ['/path', pathInfo],
+    ['/vcs', vcsInfo]
+  ] as const;
+
+  for (const [path, response] of optionalResponses) {
+    if (!response.ok) {
+      errors.push(`${path} failed (${response.status})`);
+    }
+  }
+
+  return {
+    status,
+    sessions,
+    sessionStatus,
+    permissions,
+    questions,
+    providers: providerPayload,
+    commands: commandsPayload,
+    agents: agentsPayload,
+    skills: skillsPayload,
+    pathInfo: pathPayload,
+    vcsInfo: vcsPayload,
+    openapi,
+    errors
   };
 }
