@@ -1,138 +1,186 @@
 @import "tailwindcss";
 
 :root {
-  --background: #040d18;
-  --foreground: #e5edf7;
-  --panel: rgba(9, 20, 34, 0.74);
-  --panel-border: rgba(125, 211, 252, 0.2);
+  --background: #131010;
+  --background-weak: #252121;
+  --background-stronger: #1b1818;
+  --surface-base: rgb(248 244 244 / 4%);
+  --surface-raised: rgb(248 244 244 / 2%);
+  --surface-hover: rgb(248 244 244 / 8%);
+  --surface-inset: rgb(248 244 244 / 12%);
+  --border-base: rgb(252 251 251 / 16%);
+  --border-weak: rgb(252 251 251 / 9%);
+  --border-selected: #3f82ff;
+
+  --text-base: #b7b1b1;
+  --text-weak: #8e8b8b;
+  --text-weaker: #716c6b;
+  --text-strong: #f1ecec;
+  --text-inverse: #181414;
+
+  --button-primary: #f1ecec;
+  --button-primary-hover: #fff;
+  --button-primary-foreground: #151313;
+  --button-secondary: #252121;
+  --button-secondary-hover: #2d2828;
+  --input-bg: #1b1818;
+
+  --accent: #3f82ff;
+  --accent-soft: rgb(63 130 255 / 15%);
+  --success: #48d640;
+  --success-soft: rgb(72 214 64 / 13%);
+  --success-border: rgb(72 214 64 / 30%);
+  --warning: #f6c73a;
+  --warning-soft: rgb(246 199 58 / 13%);
+  --warning-border: rgb(246 199 58 / 32%);
+  --critical: #fc533a;
+  --critical-soft: rgb(252 83 58 / 12%);
+  --critical-border: rgb(252 83 58 / 32%);
+  --info: #56b6ff;
+
+  --gradient-a: rgb(63 130 255 / 24%);
+  --gradient-b: rgb(220 222 141 / 20%);
+  --gradient-c: rgb(80 191 115 / 12%);
+
+  --shadow-xs-border:
+    0 0 0 1px var(--border-base), 0 1px 2px -1px rgb(0 0 0 / 26%),
+    0 1px 2px 0 rgb(0 0 0 / 22%), 0 2px 6px 0 rgb(0 0 0 / 18%);
 }
 
 @theme inline {
   --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  --color-foreground: var(--text-base);
+  --font-sans: "Inter", "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-mono: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", monospace;
+}
+
+* {
+  border-color: var(--border-weak);
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
 }
 
 body {
   background: var(--background);
-  color: var(--foreground);
-  font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
-  margin: 0;
-  min-height: 100vh;
+  color: var(--text-base);
+  font-family: "Inter", "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
-.night-shell {
+.oc-app {
   position: relative;
   isolation: isolate;
 }
 
-.night-backdrop {
+.oc-app::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(circle at 11% 0%, var(--gradient-a), transparent 42%),
+    radial-gradient(circle at 88% -5%, var(--gradient-b), transparent 37%),
+    radial-gradient(circle at 70% 85%, var(--gradient-c), transparent 40%),
+    linear-gradient(180deg, var(--background) 0%, var(--background-stronger) 100%);
+}
+
+.oc-app::after {
+  content: "";
   position: fixed;
   inset: 0;
   z-index: -1;
-  background:
-    radial-gradient(circle at 10% -10%, rgba(34, 211, 238, 0.25), transparent 45%),
-    radial-gradient(circle at 85% 0%, rgba(132, 204, 22, 0.14), transparent 38%),
-    linear-gradient(155deg, #030915 0%, #071323 48%, #0a1624 100%);
-}
-
-.night-stars {
-  position: absolute;
-  inset: -20%;
+  pointer-events: none;
   background-image:
-    radial-gradient(2px 2px at 20px 30px, rgba(255, 255, 255, 0.75), transparent),
-    radial-gradient(1.5px 1.5px at 210px 120px, rgba(186, 230, 253, 0.65), transparent),
-    radial-gradient(1px 1px at 380px 70px, rgba(250, 250, 250, 0.62), transparent),
-    radial-gradient(2px 2px at 520px 190px, rgba(250, 204, 21, 0.5), transparent);
-  background-size: 560px 260px;
+    linear-gradient(rgb(255 255 255 / 3%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 2.5%) 1px, transparent 1px);
+  background-size: 30px 30px;
+  mask-image: radial-gradient(circle at 50% 40%, black 12%, transparent 84%);
+  opacity: 0.35;
 }
 
-.night-stars-slow {
-  opacity: 0.34;
-  animation: drift-stars 95s linear infinite;
+.oc-panel {
+  border: 1px solid var(--border-weak);
+  background: color-mix(in srgb, var(--surface-raised) 78%, transparent);
+  backdrop-filter: blur(9px);
+  box-shadow: var(--shadow-xs-border);
 }
 
-.night-stars-fast {
-  opacity: 0.2;
-  transform: scale(1.18);
-  animation: drift-stars-reverse 60s linear infinite;
-}
-
-.night-moon-glow {
-  position: absolute;
-  top: 9%;
-  right: 10%;
-  width: 230px;
-  height: 230px;
-  border-radius: 9999px;
-  background:
-    radial-gradient(circle at 32% 30%, rgba(244, 250, 255, 0.95), rgba(34, 211, 238, 0.35) 42%, transparent 72%);
-  filter: blur(0.5px);
-  opacity: 0.8;
-  animation: moon-breath 10s ease-in-out infinite;
-}
-
-.night-grid {
+.oc-header-glow {
   position: absolute;
   inset: 0;
+  pointer-events: none;
   background:
-    linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.04) 1px, transparent 1px);
-  background-size: 40px 40px;
-  mask-image: radial-gradient(circle at 50% 45%, black 20%, transparent 95%);
-  opacity: 0.25;
+    radial-gradient(circle at 6% 50%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 48%),
+    radial-gradient(circle at 98% 26%, color-mix(in srgb, var(--warning) 16%, transparent), transparent 39%);
+  opacity: 0.7;
 }
 
-.night-panel {
-  border: 1px solid var(--panel-border);
-  background: var(--panel);
-  backdrop-filter: blur(12px);
-  border-radius: 1.5rem;
-  box-shadow:
-    0 20px 40px rgba(2, 6, 23, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+.oc-kicker {
+  color: var(--text-weak);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 600;
 }
 
-@keyframes drift-stars {
+.oc-mono {
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", monospace;
+}
+
+.oc-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-base) transparent;
+}
+
+.oc-scroll::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+.oc-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-weak) 34%, transparent);
+  border-radius: 999px;
+}
+
+.oc-scan {
+  position: relative;
+  overflow: hidden;
+}
+
+.oc-scan::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    transparent 40%,
+    color-mix(in srgb, var(--accent) 9%, transparent) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  animation: oc-scan 9s linear infinite;
+  opacity: 0.4;
+}
+
+@keyframes oc-scan {
   from {
-    transform: translate3d(0, 0, 0);
+    transform: translateY(-100%);
   }
   to {
-    transform: translate3d(-140px, 80px, 0);
-  }
-}
-
-@keyframes drift-stars-reverse {
-  from {
-    transform: translate3d(0, 0, 0) scale(1.18);
-  }
-  to {
-    transform: translate3d(130px, -70px, 0) scale(1.18);
-  }
-}
-
-@keyframes moon-breath {
-  0%,
-  100% {
-    opacity: 0.72;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.95;
-    transform: scale(1.06);
+    transform: translateY(100%);
   }
 }
 
 @media (max-width: 768px) {
-  .night-moon-glow {
-    width: 160px;
-    height: 160px;
-    top: 7%;
-    right: 6%;
-  }
-
-  .night-stars {
-    background-size: 420px 220px;
+  .oc-app::after {
+    background-size: 24px 24px;
+    opacity: 0.28;
   }
 }
