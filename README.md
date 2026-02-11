@@ -8,6 +8,7 @@ Local-first research app with a night-themed UI and an auto-managed OpenCode bac
 - Clicking `Start Research` calls `POST /api/query`.
 - Backend ensures OpenCode is running, creates a session, submits the query, and returns structured results.
 - UI polls `GET /api/opencode/status` for local engine health.
+- UI also polls OpenCode session APIs to monitor all sessions and inspect per-session message activity.
 
 ## Prerequisites
 
@@ -39,6 +40,12 @@ When a query is submitted:
 3. API creates an OpenCode session.
 4. API sends the research prompt and returns answer text, detected URLs, and metadata.
 
+The session monitor panel:
+
+1. Fetches session list from `GET /api/opencode/sessions`.
+2. Lets you select any session.
+3. Fetches details/messages from `GET /api/opencode/sessions?sessionId=<id>`.
+
 ## Environment Variables
 
 - `OPENCODE_HOST` default `127.0.0.1`
@@ -57,6 +64,14 @@ When a query is submitted:
   - Output: result id, answer text, source URLs, processing metadata, and OpenCode session id.
 - `GET /api/opencode/status`
   - Output: running state, host/port, launch command, recent logs, last startup error.
+- `GET /api/opencode/sessions`
+  - Query params:
+    - `limit` optional, max sessions returned (default 40)
+    - `sessionId` optional, return detail for one session
+    - `messageLimit` optional, max messages in detail mode (default 120)
+    - `autostart=1` optional, ensure OpenCode is started before fetching
+  - Output (list mode): running state, host/port, session count, sorted sessions.
+  - Output (detail mode): selected session metadata, messages, message count, running tool-call count.
 
 ## Commands
 
@@ -74,6 +89,9 @@ npm run start
   - Try manual start: `opencode serve --hostname 127.0.0.1 --port 4096`
 - Query works but response quality is odd:
   - Check `/api/opencode/status` logs for backend stderr/stdout hints.
+- Session monitor fails:
+  - Verify OpenCode API is reachable on configured host/port.
+  - Inspect `/api/opencode/status` and `/api/opencode/sessions` responses for startup or API errors.
 - Turbopack build fails in restricted environments:
   - Use webpack build path: `npm run build -- --webpack`
 
@@ -82,6 +100,7 @@ npm run start
 - `src/lib/opencode.ts` OpenCode process manager + API client glue
 - `src/app/api/query/route.ts` research query endpoint
 - `src/app/api/opencode/status/route.ts` runtime engine status endpoint
+- `src/app/api/opencode/sessions/route.ts` OpenCode session monitor endpoint
 - `src/app/page.tsx` main UI
 - `src/app/globals.css` visual theme and animations
 
