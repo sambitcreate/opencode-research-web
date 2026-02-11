@@ -9,6 +9,11 @@ Local-first OpenCode control plane for monitoring and executing OpenCode operati
 - Supports direct control of OpenCode via a generic backend proxy route (`/api/opencode/control`) for any OpenCode API path/method.
 - Includes monitor-first UI modules:
   - session list + session detail/message timeline,
+  - session timeline with per-message `revert` / `fork` / `copy`,
+  - explicit session `undo` / `redo` controls,
+  - transcript copy/export (`.md`) from selected session,
+  - SSE event debug panel (`/api/opencode/events`) with source filtering,
+  - session side summaries (todo, diff, context/cost when reported),
   - quick prompt dispatch (sync + async),
   - session operation runner (fork/revert/share/summarize/delete/etc),
   - permission and question response queues,
@@ -78,22 +83,49 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
 - `GET /api/opencode/sessions`
   - Query params:
     - `limit` optional (default 40)
+    - `roots` optional (`1|0|true|false`) passthrough to OpenCode session search
+    - `start` optional passthrough cursor/offset value
+    - `search` optional passthrough search text
     - `sessionId` optional (detail mode)
     - `messageLimit` optional (default 120)
+    - `include` optional CSV for detail mode (`messages,todo,diff,children`)
     - `autostart=1` optional
   - List mode contract preserved:
     - `running`, `host`, `port`, `started`, `count`, `sessions`
   - Detail mode contract preserved:
     - `running`, `host`, `port`, `started`, `session`, `messages`, `messageCount`, `latestMessageAt`, `activeToolCalls`
+  - Detail mode optional additive fields:
+    - `todo`, `diff`, `children` (when requested via `include`)
+
+- `GET /api/opencode/session/:sessionId/timeline`
+  - User-message-centric timeline output for session workbench UIs.
+  - Query params:
+    - `autostart=1` optional
+  - Returns:
+    - `running`, `host`, `port`, `started`, `sessionId`, `count`, `entries`
+    - each entry includes `messageId`, `preview`, `createdAt`, `assistantMessageId`, `assistantState`, `hasDiffMarker`
+
+- `GET /api/opencode/session/:sessionId/transcript`
+  - Generates markdown transcript for copy/export flows.
+  - Query params:
+    - `thinking=1|true` optional
+    - `toolDetails=1|true` optional
+    - `assistantMetadata=1|true` optional
+    - `autostart=1` optional
+  - Returns:
+    - `running`, `host`, `port`, `started`, `sessionId`, `title`, `generatedAt`, `messageCount`, `options`, `markdown`
 
 - `GET /api/opencode/monitor`
   - Aggregated monitor snapshot for the dashboard.
   - Query params:
     - `autostart=1` optional
     - `sessionLimit` optional (default 80)
+    - `include` optional CSV:
+      - `providers,agents,skills,commands,path,vcs,mcp,lsp,formatter,projects,config,openapi`
   - Returns:
     - `status`, `sessions`, `sessionStatus`, `permissions`, `questions`,
     - `providers`, `commands`, `agents`, `skills`, `pathInfo`, `vcsInfo`,
+    - optional normalized blocks (when included): `mcp`, `lsp`, `formatter`, `projects`, `config`
     - `openapi`, `errors`
 
 - `POST /api/opencode/control`
@@ -109,9 +141,30 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
     - `{ ok, status, contentType, data, text }`
   - Enables the web UI to trigger all OpenCode operations, including TUI endpoints.
 
+- `POST /api/opencode/action`
+  - Typed high-level action route with stable error envelopes.
+  - Input:
+    - `target` required:
+      - `session | message | permission | question | provider | mcp | project | worktree | pty | global`
+    - `action` required unless custom `path` is supplied
+    - optional IDs: `sessionId`, `messageId`, `requestId`, `providerId`, `mcpName`, `projectId`, `ptyId`
+    - optional passthrough: `body`, `method`, `path`, `timeoutMs`, `autostart`
+  - Output:
+    - success: `{ ok, target, action, request, result }`
+    - validation/resolution errors: `{ ok: false, error: { code, message, details } }`
+
 - `GET /api/opencode/openapi`
   - Returns parsed OpenCode OpenAPI endpoint snapshot for explorer UX.
   - Attempts live OpenCode spec first; falls back to an embedded endpoint manifest.
+
+- `GET /api/opencode/events`
+  - SSE bridge for OpenCode event streams with normalized payloads.
+  - Query params:
+    - `scope=instance|global|both` optional (default `instance`)
+    - `autostart=1` optional
+  - Emits SSE events:
+    - `ready`, `source_open`, `event`, `source_closed`, `source_error`, `complete`
+  - `event` payloads include source-tagged normalized objects with monotonic `seq`.
 
 ## Commands
 
