@@ -205,3 +205,6 @@ Last updated: February 11, 2026
   - Added mention autocomplete for `@file`, `@agent`, and `@mcp` resource references
   - Added explicit command/shell mode indicators and shell agent selection
   - Added file/image attachments with compact inline context packaging for prompt/command dispatch
+- [x] 2026-02-11: Stabilized verification baseline:
+  - Excluded `/reference` mirror repositories from app lint/type-check scope (`eslint` + `tsconfig`)
+  - Restored green checks for `npm run lint` and `npm run build -- --webpack`

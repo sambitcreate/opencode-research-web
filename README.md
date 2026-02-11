@@ -177,6 +177,8 @@ npm run build -- --webpack
 npm run start
 ```
 
+Reference repositories under `reference/` are intentionally excluded from app lint/type-check scope so verification reflects only this web app.
+
 ## Verification Checklist
 
 ```bash
