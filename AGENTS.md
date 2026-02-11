@@ -91,6 +91,10 @@ Optional live smoke test:
 
 When changing behavior, update `README.md` in the same PR/commit.
 
+## Update Tracking
+
+Use `update-api-plan.md` to track all updates and feature work in a checklist format.
+
 ## Reference Repositories
 
 The following repositories are cloned in `/reference` for code/inspiration reference:
