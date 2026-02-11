@@ -1,26 +1,138 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #040d18;
+  --foreground: #e5edf7;
+  --panel: rgba(9, 20, 34, 0.74);
+  --panel-border: rgba(125, 211, 252, 0.2);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Consolas", monospace;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+  margin: 0;
+  min-height: 100vh;
+}
+
+.night-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+.night-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 10% -10%, rgba(34, 211, 238, 0.25), transparent 45%),
+    radial-gradient(circle at 85% 0%, rgba(132, 204, 22, 0.14), transparent 38%),
+    linear-gradient(155deg, #030915 0%, #071323 48%, #0a1624 100%);
+}
+
+.night-stars {
+  position: absolute;
+  inset: -20%;
+  background-image:
+    radial-gradient(2px 2px at 20px 30px, rgba(255, 255, 255, 0.75), transparent),
+    radial-gradient(1.5px 1.5px at 210px 120px, rgba(186, 230, 253, 0.65), transparent),
+    radial-gradient(1px 1px at 380px 70px, rgba(250, 250, 250, 0.62), transparent),
+    radial-gradient(2px 2px at 520px 190px, rgba(250, 204, 21, 0.5), transparent);
+  background-size: 560px 260px;
+}
+
+.night-stars-slow {
+  opacity: 0.34;
+  animation: drift-stars 95s linear infinite;
+}
+
+.night-stars-fast {
+  opacity: 0.2;
+  transform: scale(1.18);
+  animation: drift-stars-reverse 60s linear infinite;
+}
+
+.night-moon-glow {
+  position: absolute;
+  top: 9%;
+  right: 10%;
+  width: 230px;
+  height: 230px;
+  border-radius: 9999px;
+  background:
+    radial-gradient(circle at 32% 30%, rgba(244, 250, 255, 0.95), rgba(34, 211, 238, 0.35) 42%, transparent 72%);
+  filter: blur(0.5px);
+  opacity: 0.8;
+  animation: moon-breath 10s ease-in-out infinite;
+}
+
+.night-grid {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.04) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: radial-gradient(circle at 50% 45%, black 20%, transparent 95%);
+  opacity: 0.25;
+}
+
+.night-panel {
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+  border-radius: 1.5rem;
+  box-shadow:
+    0 20px 40px rgba(2, 6, 23, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+@keyframes drift-stars {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-140px, 80px, 0);
+  }
+}
+
+@keyframes drift-stars-reverse {
+  from {
+    transform: translate3d(0, 0, 0) scale(1.18);
+  }
+  to {
+    transform: translate3d(130px, -70px, 0) scale(1.18);
+  }
+}
+
+@keyframes moon-breath {
+  0%,
+  100% {
+    opacity: 0.72;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.06);
+  }
+}
+
+@media (max-width: 768px) {
+  .night-moon-glow {
+    width: 160px;
+    height: 160px;
+    top: 7%;
+    right: 6%;
+  }
+
+  .night-stars {
+    background-size: 420px 220px;
+  }
 }
