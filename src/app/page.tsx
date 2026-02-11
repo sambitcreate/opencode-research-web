@@ -4,8 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertCircle,
+  AtSign,
   CheckCircle2,
+  Command,
   Database,
+  FileCode2,
+  FileImage,
+  FilePlus2,
   LoaderCircle,
   MonitorCog,
   Moon,
@@ -14,7 +19,9 @@ import {
   Search,
   SendHorizontal,
   Server,
-  Sun
+  Sun,
+  TerminalSquare,
+  X
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -146,6 +153,7 @@ type OpenCodeMonitorSnapshot = {
   skills: unknown;
   pathInfo: unknown;
   vcsInfo: unknown;
+  mcp?: unknown;
   openapi: OpenCodeOpenApiSnapshot;
   errors: string[];
 };
@@ -174,6 +182,31 @@ type OpenCodeDebugEvent = {
 type ColorScheme = 'system' | 'light' | 'dark';
 type ResolvedScheme = 'light' | 'dark';
 type EngineState = 'checking' | 'offline' | 'booting' | 'ready' | 'error';
+type ComposerMode = 'prompt-sync' | 'prompt-async' | 'command' | 'shell';
+type ComposerMentionCategory = 'file' | 'agent' | 'mcp';
+
+type ComposerToken = {
+  trigger: '/' | '@';
+  value: string;
+  start: number;
+  end: number;
+};
+
+type ComposerSuggestion = {
+  id: string;
+  kind: 'slash' | 'mention';
+  label: string;
+  detail: string;
+  replacement: string;
+  mode?: ComposerMode;
+  value?: string;
+  mentionCategory?: ComposerMentionCategory;
+};
+
+type ComposerAttachment = {
+  id: string;
+  file: File;
+};
 
 type ThemePalette = {
   background: string;
@@ -746,6 +779,195 @@ const TUI_COMMAND_CHOICES = [
   'agent_cycle'
 ];
 
+const COMPOSER_ATTACHMENT_LIMIT = 8;
+const COMPOSER_ATTACHMENT_MAX_BYTES = 256_000;
+const COMPOSER_TEXT_SNIPPET_LIMIT = 4_000;
+const COMPOSER_IMAGE_DATA_URL_LIMIT = 9_000;
+const COMPOSER_SUGGESTION_LIMIT = 8;
+
+const TEXT_ATTACHMENT_EXTENSIONS = new Set([
+  'txt',
+  'md',
+  'markdown',
+  'json',
+  'yaml',
+  'yml',
+  'xml',
+  'csv',
+  'ts',
+  'tsx',
+  'js',
+  'jsx',
+  'mjs',
+  'cjs',
+  'html',
+  'css',
+  'scss',
+  'sh',
+  'bash',
+  'zsh',
+  'env',
+  'toml',
+  'ini',
+  'sql',
+  'py',
+  'go',
+  'rs',
+  'java',
+  'swift',
+  'kt',
+  'rb'
+]);
+
+const COMPOSER_MODE_OPTIONS: Array<{ mode: ComposerMode; label: string; detail: string }> = [
+  { mode: 'prompt-sync', label: 'Prompt', detail: '/session/:id/message' },
+  { mode: 'prompt-async', label: 'Async Prompt', detail: '/session/:id/prompt_async' },
+  { mode: 'command', label: 'Command', detail: '/session/:id/command' },
+  { mode: 'shell', label: 'Shell', detail: '/session/:id/shell' }
+];
+
+const COMPOSER_SLASH_OPTIONS: Array<{
+  id: string;
+  label: string;
+  detail: string;
+  mode: ComposerMode;
+}> = [
+  { id: 'slash-prompt', label: '/prompt', detail: 'Switch to sync prompt mode', mode: 'prompt-sync' },
+  { id: 'slash-async', label: '/async', detail: 'Switch to async prompt mode', mode: 'prompt-async' },
+  { id: 'slash-command', label: '/command', detail: 'Switch to command mode', mode: 'command' },
+  { id: 'slash-shell', label: '/shell', detail: 'Switch to shell mode', mode: 'shell' }
+];
+
+function toUniqueStrings(values: string[], limit = 120): string[] {
+  const seen = new Set<string>();
+  const next: string[] = [];
+
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(trimmed);
+    if (next.length >= limit) break;
+  }
+
+  return next;
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function fileSignature(file: File): string {
+  return `${file.name}:${file.size}:${file.type}:${file.lastModified}`;
+}
+
+function isTextAttachment(file: File): boolean {
+  if (file.type.startsWith('text/')) return true;
+  if (
+    file.type === 'application/json' ||
+    file.type === 'application/xml' ||
+    file.type === 'application/javascript' ||
+    file.type === 'application/x-sh'
+  ) {
+    return true;
+  }
+
+  const extension = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() ?? '' : '';
+  return extension ? TEXT_ATTACHMENT_EXTENSIONS.has(extension) : false;
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+      } else {
+        reject(new Error(`Unable to read ${file.name}`));
+      }
+    };
+    reader.onerror = () => reject(new Error(`Unable to read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function collectStringFields(value: unknown, fieldNames: string[], depth = 0, bucket: string[] = []): string[] {
+  if (!value || depth > 4) return bucket;
+  if (Array.isArray(value)) {
+    for (const nested of value) {
+      collectStringFields(nested, fieldNames, depth + 1, bucket);
+      if (bucket.length >= 240) break;
+    }
+    return bucket;
+  }
+
+  const record = asRecord(value);
+  if (!record) return bucket;
+
+  for (const fieldName of fieldNames) {
+    const fieldValue = record[fieldName];
+    if (typeof fieldValue === 'string') {
+      bucket.push(fieldValue);
+    }
+  }
+
+  for (const nested of Object.values(record)) {
+    if (!nested || typeof nested !== 'object') continue;
+    collectStringFields(nested, fieldNames, depth + 1, bucket);
+    if (bucket.length >= 240) break;
+  }
+
+  return bucket;
+}
+
+function collectLikelyFilePaths(messages: OpenCodeSessionMessage[]): string[] {
+  const pattern = /(?:^|[\s"'`(])((?:\.{1,2}\/)?(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+|[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+)(?=$|[\s"'`),:;])/g;
+  const matches: string[] = [];
+
+  for (const message of messages) {
+    const text = message.text;
+    let match: RegExpExecArray | null = pattern.exec(text);
+    while (match) {
+      const candidate = match[1]?.trim();
+      if (
+        candidate &&
+        !candidate.startsWith('http://') &&
+        !candidate.startsWith('https://') &&
+        !candidate.startsWith('@')
+      ) {
+        matches.push(candidate);
+      }
+      match = pattern.exec(text);
+    }
+    pattern.lastIndex = 0;
+  }
+
+  return toUniqueStrings(matches, 100);
+}
+
+function extractComposerToken(value: string, caretPosition: number): ComposerToken | null {
+  const safeCaret = Math.max(0, Math.min(caretPosition, value.length));
+  const textBeforeCursor = value.slice(0, safeCaret);
+  const match = /(?:^|\s)([@/][^\s]*)$/.exec(textBeforeCursor);
+  if (!match) return null;
+
+  const raw = match[1];
+  const trigger = raw[0];
+  if (trigger !== '@' && trigger !== '/') return null;
+
+  return {
+    trigger,
+    value: raw.slice(1),
+    start: safeCaret - raw.length,
+    end: safeCaret
+  };
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -993,7 +1215,12 @@ export default function OpenCodeMonitorPage() {
   const [newSessionTitle, setNewSessionTitle] = useState('');
   const [newSessionParent, setNewSessionParent] = useState('');
   const [quickPrompt, setQuickPrompt] = useState('');
-  const [quickPromptMode, setQuickPromptMode] = useState<'sync' | 'async'>('sync');
+  const [composerMode, setComposerMode] = useState<ComposerMode>('prompt-sync');
+  const [composerCommand, setComposerCommand] = useState('review');
+  const [composerShellAgent, setComposerShellAgent] = useState('');
+  const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
+  const [composerCaretPosition, setComposerCaretPosition] = useState(0);
+  const [composerSuggestionIndex, setComposerSuggestionIndex] = useState(0);
 
   const [sessionOperationId, setSessionOperationId] = useState<string>(SESSION_OPERATION_DEFINITIONS[0]?.id ?? '');
   const [sessionOperationBody, setSessionOperationBody] = useState<string>(SESSION_OPERATION_DEFINITIONS[0]?.template ?? '{}');
@@ -1025,6 +1252,8 @@ export default function OpenCodeMonitorPage() {
   const activeSessionIdRef = useRef<string | null>(null);
   const refreshMonitorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshSessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
 
   const callControl = useCallback(
     async (input: {
@@ -1071,7 +1300,10 @@ export default function OpenCodeMonitorPage() {
     if (!options?.silent) setIsMonitorLoading(true);
 
     try {
-      const response = await fetch('/api/opencode/monitor?sessionLimit=120&autostart=0', { cache: 'no-store' });
+      const response = await fetch(
+        '/api/opencode/monitor?sessionLimit=120&autostart=0&include=providers,agents,skills,commands,path,vcs,mcp,openapi',
+        { cache: 'no-store' }
+      );
       const payload = (await response.json()) as OpenCodeMonitorSnapshot | { error?: string };
       if (!response.ok) {
         throw new Error((payload as { error?: string }).error || 'Failed to fetch OpenCode monitor snapshot.');
@@ -1389,6 +1621,179 @@ export default function OpenCodeMonitorPage() {
   const diffSummary = useMemo(() => summarizeDiff(sessionDetail?.diff), [sessionDetail?.diff]);
   const usageSummary = useMemo(() => summarizeSessionUsage(selectedSessionStatus), [selectedSessionStatus]);
 
+  const agentCandidates = useMemo(() => {
+    const values = collectStringFields(monitor?.agents, ['id', 'name', 'slug', 'title', 'agentID']);
+    return toUniqueStrings(
+      values.filter((value) => value.length <= 80 && !value.includes('{') && !value.includes('[')),
+      64
+    );
+  }, [monitor?.agents]);
+
+  const mcpResourceCandidates = useMemo(() => {
+    const values = collectStringFields(monitor?.mcp, ['name', 'uri', 'title', 'id', 'resource']);
+    return toUniqueStrings(
+      values.filter((value) => value.length <= 160 && !value.includes('\n') && !value.includes('{')),
+      80
+    );
+  }, [monitor?.mcp]);
+
+  const fileMentionCandidates = useMemo(() => {
+    const sessionMessages = sessionDetail?.messages ?? [];
+    const fromMessages = collectLikelyFilePaths(sessionMessages);
+    return toUniqueStrings(fromMessages, 80);
+  }, [sessionDetail?.messages]);
+
+  const activeComposerToken = useMemo(() => {
+    return extractComposerToken(quickPrompt, composerCaretPosition);
+  }, [composerCaretPosition, quickPrompt]);
+
+  const composerSuggestions = useMemo<ComposerSuggestion[]>(() => {
+    if (!activeComposerToken) return [];
+
+    if (activeComposerToken.trigger === '/') {
+      const query = activeComposerToken.value.trim().toLowerCase();
+      return COMPOSER_SLASH_OPTIONS.filter((option) => {
+        if (!query) return true;
+        return option.label.toLowerCase().includes(query);
+      })
+        .slice(0, COMPOSER_SUGGESTION_LIMIT)
+        .map((option) => ({
+          id: option.id,
+          kind: 'slash',
+          label: option.label,
+          detail: option.detail,
+          replacement: '',
+          mode: option.mode
+        }));
+    }
+
+    const normalizedQuery = activeComposerToken.value.trim().toLowerCase();
+    const categoryHints: Array<{ category: ComposerMentionCategory; label: string; detail: string }> = [
+      { category: 'file', label: '@file:', detail: 'Insert a file reference mention' },
+      { category: 'agent', label: '@agent:', detail: 'Insert an agent mention' },
+      { category: 'mcp', label: '@mcp:', detail: 'Insert an MCP resource mention' }
+    ];
+    const suggestions: ComposerSuggestion[] = [];
+
+    if (!normalizedQuery || (!normalizedQuery.includes(':') && normalizedQuery.length <= 12)) {
+      for (const hint of categoryHints) {
+        if (normalizedQuery && !hint.category.startsWith(normalizedQuery) && !hint.label.startsWith(`@${normalizedQuery}`)) {
+          continue;
+        }
+        suggestions.push({
+          id: `mention-root-${hint.category}`,
+          kind: 'mention',
+          label: hint.label,
+          detail: hint.detail,
+          replacement: hint.label,
+          mentionCategory: hint.category
+        });
+      }
+    }
+
+    const [rawCategory = '', rawQuery = ''] = normalizedQuery.split(':', 2);
+    const search = rawQuery.trim();
+
+    if (rawCategory === 'file') {
+      for (const candidate of fileMentionCandidates) {
+        if (search && !candidate.toLowerCase().includes(search)) continue;
+        suggestions.push({
+          id: `mention-file-${candidate}`,
+          kind: 'mention',
+          label: candidate,
+          detail: 'file',
+          replacement: `@file:${candidate}`,
+          value: candidate,
+          mentionCategory: 'file'
+        });
+        if (suggestions.length >= COMPOSER_SUGGESTION_LIMIT) break;
+      }
+    }
+
+    if (rawCategory === 'agent') {
+      for (const candidate of agentCandidates) {
+        if (search && !candidate.toLowerCase().includes(search)) continue;
+        suggestions.push({
+          id: `mention-agent-${candidate}`,
+          kind: 'mention',
+          label: candidate,
+          detail: 'agent',
+          replacement: `@agent:${candidate}`,
+          value: candidate,
+          mentionCategory: 'agent'
+        });
+        if (suggestions.length >= COMPOSER_SUGGESTION_LIMIT) break;
+      }
+    }
+
+    if (rawCategory === 'mcp') {
+      for (const candidate of mcpResourceCandidates) {
+        if (search && !candidate.toLowerCase().includes(search)) continue;
+        suggestions.push({
+          id: `mention-mcp-${candidate}`,
+          kind: 'mention',
+          label: candidate,
+          detail: 'mcp',
+          replacement: `@mcp:${candidate}`,
+          value: candidate,
+          mentionCategory: 'mcp'
+        });
+        if (suggestions.length >= COMPOSER_SUGGESTION_LIMIT) break;
+      }
+    }
+
+    return suggestions.slice(0, COMPOSER_SUGGESTION_LIMIT);
+  }, [activeComposerToken, agentCandidates, fileMentionCandidates, mcpResourceCandidates]);
+
+  const selectedComposerSuggestion = useMemo(() => {
+    if (composerSuggestions.length === 0) return null;
+    return composerSuggestions[Math.min(composerSuggestionIndex, composerSuggestions.length - 1)] ?? null;
+  }, [composerSuggestionIndex, composerSuggestions]);
+
+  const composerModeDetails = useMemo(() => {
+    return COMPOSER_MODE_OPTIONS.find((option) => option.mode === composerMode) ?? COMPOSER_MODE_OPTIONS[0];
+  }, [composerMode]);
+
+  const composerPlaceholder = useMemo(() => {
+    if (!activeSessionId) return 'Select a session to use the composer.';
+    if (composerMode === 'prompt-sync') return 'Write a prompt for the selected session...';
+    if (composerMode === 'prompt-async') return 'Write an async prompt for background execution...';
+    if (composerMode === 'command') return 'Optional command arguments/context...';
+    return 'Enter shell command to run in session context...';
+  }, [activeSessionId, composerMode]);
+
+  const composerSubmitLabel = useMemo(() => {
+    if (composerMode === 'command') return 'Run Command';
+    if (composerMode === 'shell') return 'Run Shell';
+    if (composerMode === 'prompt-async') return 'Send Async';
+    return 'Send Prompt';
+  }, [composerMode]);
+
+  const composerCanSubmit = useMemo(() => {
+    if (!activeSessionId || isOperationRunning) return false;
+
+    if (composerMode === 'command') {
+      return composerCommand.trim().length > 0;
+    }
+
+    if (composerMode === 'shell') {
+      return quickPrompt.trim().length > 0;
+    }
+
+    return quickPrompt.trim().length > 0 || composerAttachments.length > 0;
+  }, [activeSessionId, composerAttachments.length, composerCommand, composerMode, isOperationRunning, quickPrompt]);
+
+  useEffect(() => {
+    if (composerMode !== 'shell') return;
+    if (composerShellAgent.trim()) return;
+    if (agentCandidates.length === 0) return;
+    setComposerShellAgent(agentCandidates[0]);
+  }, [agentCandidates, composerMode, composerShellAgent]);
+
+  useEffect(() => {
+    setComposerSuggestionIndex(0);
+  }, [activeComposerToken?.trigger, activeComposerToken?.value]);
+
   const filteredDebugEvents = useMemo(() => {
     if (eventDebugFilter === 'all') return eventDebugEvents;
     return eventDebugEvents.filter((entry) => entry.source === eventDebugFilter);
@@ -1503,31 +1908,188 @@ export default function OpenCodeMonitorPage() {
     }
   };
 
-  const handleSendPrompt = async () => {
-    if (!activeSessionId || !quickPrompt.trim()) return;
+  const handleComposerAttachmentSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const incoming = Array.from(event.target.files ?? []);
+    if (incoming.length === 0) return;
+
+    setComposerAttachments((current) => {
+      const next = [...current];
+      const seen = new Set(next.map((entry) => entry.id));
+      for (const file of incoming) {
+        if (next.length >= COMPOSER_ATTACHMENT_LIMIT) break;
+        const id = fileSignature(file);
+        if (seen.has(id)) continue;
+        next.push({ id, file });
+        seen.add(id);
+      }
+      return next;
+    });
+
+    event.target.value = '';
+  }, []);
+
+  const handleRemoveComposerAttachment = useCallback((attachmentId: string) => {
+    setComposerAttachments((current) => current.filter((entry) => entry.id !== attachmentId));
+  }, []);
+
+  const handleComposerInputChange = useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setQuickPrompt(event.target.value);
+    setComposerCaretPosition(event.target.selectionStart ?? event.target.value.length);
+  }, []);
+
+  const handleComposerSelectionChange = useCallback((event: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    const nextPosition = event.currentTarget.selectionStart ?? 0;
+    setComposerCaretPosition(nextPosition);
+  }, []);
+
+  const applyComposerSuggestion = useCallback(
+    (suggestion: ComposerSuggestion) => {
+      if (!activeComposerToken) return;
+
+      const before = quickPrompt.slice(0, activeComposerToken.start);
+      const after = quickPrompt.slice(activeComposerToken.end);
+      const suffix = suggestion.kind === 'slash' ? '' : ' ';
+      const replacement = `${suggestion.replacement}${suffix}`;
+      const nextPrompt = `${before}${replacement}${after}`;
+      const nextCaret = before.length + replacement.length;
+
+      setQuickPrompt(nextPrompt);
+      setComposerCaretPosition(nextCaret);
+      setComposerSuggestionIndex(0);
+
+      if (suggestion.mode) {
+        setComposerMode(suggestion.mode);
+      }
+      if (suggestion.mentionCategory === 'agent' && suggestion.value) {
+        setComposerShellAgent(suggestion.value);
+      }
+
+      requestAnimationFrame(() => {
+        const textarea = composerTextareaRef.current;
+        if (!textarea) return;
+        textarea.focus();
+        textarea.setSelectionRange(nextCaret, nextCaret);
+      });
+    },
+    [activeComposerToken, quickPrompt]
+  );
+
+  const buildComposerAttachmentContext = useCallback(async (): Promise<string> => {
+    if (composerAttachments.length === 0) return '';
+
+    const blocks: string[] = ['Attached file context:'];
+    for (const attachment of composerAttachments) {
+      const file = attachment.file;
+      const descriptor = `${file.name} (${file.type || 'application/octet-stream'}, ${formatBytes(file.size)})`;
+
+      if (file.size > COMPOSER_ATTACHMENT_MAX_BYTES) {
+        blocks.push(`- ${descriptor} [omitted: larger than ${formatBytes(COMPOSER_ATTACHMENT_MAX_BYTES)}]`);
+        continue;
+      }
+
+      if (isTextAttachment(file)) {
+        try {
+          const fullText = await file.text();
+          const snippet = fullText.slice(0, COMPOSER_TEXT_SNIPPET_LIMIT);
+          blocks.push(`- ${descriptor}`);
+          blocks.push('```text');
+          blocks.push(snippet || '(empty file)');
+          if (fullText.length > snippet.length) {
+            blocks.push(`... truncated ${fullText.length - snippet.length} characters`);
+          }
+          blocks.push('```');
+          continue;
+        } catch (error) {
+          blocks.push(`- ${descriptor} [read failed: ${error instanceof Error ? error.message : 'unknown error'}]`);
+          continue;
+        }
+      }
+
+      if (file.type.startsWith('image/')) {
+        try {
+          const dataUrl = await readFileAsDataUrl(file);
+          const snippet = dataUrl.slice(0, COMPOSER_IMAGE_DATA_URL_LIMIT);
+          blocks.push(`- ${descriptor}`);
+          blocks.push(
+            `image_data_url: ${snippet}${dataUrl.length > snippet.length ? '... [truncated to keep request compact]' : ''}`
+          );
+          continue;
+        } catch (error) {
+          blocks.push(`- ${descriptor} [image read failed: ${error instanceof Error ? error.message : 'unknown error'}]`);
+          continue;
+        }
+      }
+
+      blocks.push(`- ${descriptor} [binary attachment metadata only]`);
+    }
+
+    return blocks.join('\n');
+  }, [composerAttachments]);
+
+  const handleSendPrompt = useCallback(async () => {
+    if (!activeSessionId) return;
+
+    const trimmedPrompt = quickPrompt.trim();
+    if (composerMode === 'command' && !composerCommand.trim()) return;
+    if (composerMode === 'shell' && !trimmedPrompt) return;
+    if (composerMode !== 'command' && composerMode !== 'shell' && !trimmedPrompt && composerAttachments.length === 0) return;
+
+    if (composerMode === 'shell' && composerAttachments.length > 0) {
+      setOperationError('Attachments are currently supported for prompt/command mode only.');
+      return;
+    }
 
     setIsOperationRunning(true);
     setOperationError(null);
     setEngineState('booting');
 
     try {
-      const path =
-        quickPromptMode === 'async'
-          ? `/session/${encodeURIComponent(activeSessionId)}/prompt_async`
-          : `/session/${encodeURIComponent(activeSessionId)}/message`;
-      const response = await callControl({
-        path,
-        method: 'POST',
-        body: {
-          parts: [{ type: 'text', text: quickPrompt.trim() }]
-        }
-      });
+      const attachmentContext = await buildComposerAttachmentContext();
+      let response: OpenCodeControlResponse;
+
+      if (composerMode === 'prompt-sync' || composerMode === 'prompt-async') {
+        const promptText = [trimmedPrompt, attachmentContext].filter(Boolean).join('\n\n').trim();
+        const path =
+          composerMode === 'prompt-async'
+            ? `/session/${encodeURIComponent(activeSessionId)}/prompt_async`
+            : `/session/${encodeURIComponent(activeSessionId)}/message`;
+
+        response = await callControl({
+          path,
+          method: 'POST',
+          body: {
+            parts: [{ type: 'text', text: promptText }]
+          }
+        });
+      } else if (composerMode === 'command') {
+        const argumentText = [trimmedPrompt, attachmentContext].filter(Boolean).join('\n\n').trim();
+        const body: Record<string, unknown> = { command: composerCommand.trim() };
+        if (argumentText) body.arguments = argumentText;
+        response = await callControl({
+          path: `/session/${encodeURIComponent(activeSessionId)}/command`,
+          method: 'POST',
+          body
+        });
+      } else {
+        const body: Record<string, unknown> = { command: trimmedPrompt };
+        if (composerShellAgent.trim()) body.agent = composerShellAgent.trim();
+        response = await callControl({
+          path: `/session/${encodeURIComponent(activeSessionId)}/shell`,
+          method: 'POST',
+          body
+        });
+      }
+
       setOperationResult(response);
       if (!response.ok) {
-        throw new Error(response.text || 'OpenCode prompt failed.');
+        throw new Error(response.text || 'OpenCode composer action failed.');
       }
 
       setQuickPrompt('');
+      setComposerCaretPosition(0);
+      setComposerSuggestionIndex(0);
+      setComposerAttachments([]);
+
       await Promise.all([
         refreshMonitor({ silent: true }),
         refreshSessionDetail(activeSessionId, { silent: true }),
@@ -1535,12 +2097,60 @@ export default function OpenCodeMonitorPage() {
       ]);
       setEngineState('ready');
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : 'Prompt submission failed.');
+      setOperationError(error instanceof Error ? error.message : 'Composer submission failed.');
       setEngineState('error');
     } finally {
       setIsOperationRunning(false);
     }
-  };
+  }, [
+    activeSessionId,
+    buildComposerAttachmentContext,
+    callControl,
+    composerAttachments.length,
+    composerCommand,
+    composerMode,
+    composerShellAgent,
+    quickPrompt,
+    refreshMonitor,
+    refreshSessionDetail,
+    refreshSessionTimeline
+  ]);
+
+  const handleComposerKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault();
+        void handleSendPrompt();
+        return;
+      }
+
+      if (composerSuggestions.length === 0) return;
+
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setComposerSuggestionIndex((current) => (current + 1) % composerSuggestions.length);
+        return;
+      }
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setComposerSuggestionIndex((current) => (current - 1 + composerSuggestions.length) % composerSuggestions.length);
+        return;
+      }
+
+      if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
+        if (!selectedComposerSuggestion) return;
+        event.preventDefault();
+        applyComposerSuggestion(selectedComposerSuggestion);
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        setComposerSuggestionIndex(0);
+      }
+    },
+    [applyComposerSuggestion, composerSuggestions, handleSendPrompt, selectedComposerSuggestion]
+  );
 
   const handleRunSessionOperation = async () => {
     if (!selectedOperation || !activeSessionId) return;
@@ -2252,28 +2862,174 @@ export default function OpenCodeMonitorPage() {
                 <Separator />
 
                 <div className="space-y-2">
-                  <Textarea
-                    value={quickPrompt}
-                    onChange={(event) => setQuickPrompt(event.target.value)}
-                    placeholder={activeSessionId ? 'Prompt selected session...' : 'Select a session to prompt'}
-                    className="h-28 resize-none"
-                  />
-                  <div className="grid grid-cols-2 gap-2">
-                    <select
-                      value={quickPromptMode}
-                      onChange={(event) => setQuickPromptMode(event.target.value as 'sync' | 'async')}
-                      className="h-9 rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
-                    >
-                      <option value="sync">Sync Prompt</option>
-                      <option value="async">Async Prompt</option>
-                    </select>
+                  <p className="oc-kicker">Advanced Composer</p>
+
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {COMPOSER_MODE_OPTIONS.map((option) => (
+                      <Button
+                        key={option.mode}
+                        size="sm"
+                        variant={composerMode === option.mode ? 'default' : 'secondary'}
+                        className="justify-start"
+                        onClick={() => setComposerMode(option.mode)}
+                      >
+                        {option.mode === 'command' && <Command className="h-3.5 w-3.5" />}
+                        {option.mode === 'shell' && <TerminalSquare className="h-3.5 w-3.5" />}
+                        {(option.mode === 'prompt-sync' || option.mode === 'prompt-async') && <SendHorizontal className="h-3.5 w-3.5" />}
+                        {option.label}
+                      </Button>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5">
+                    <Badge>mode: {composerModeDetails.label}</Badge>
+                    <Badge>{composerModeDetails.detail}</Badge>
+                    {composerMode === 'command' && <Badge>command: {composerCommand || 'required'}</Badge>}
+                    {composerMode === 'shell' && <Badge>agent: {composerShellAgent || 'auto'}</Badge>}
+                    {composerAttachments.length > 0 && <Badge>{composerAttachments.length} attachments</Badge>}
+                  </div>
+
+                  {composerMode === 'command' && (
+                    <Input
+                      value={composerCommand}
+                      onChange={(event) => setComposerCommand(event.target.value)}
+                      placeholder="Command name (example: review)"
+                    />
+                  )}
+
+                  {composerMode === 'shell' && (
+                    <div className="space-y-1.5">
+                      {agentCandidates.length > 0 ? (
+                        <select
+                          value={composerShellAgent}
+                          onChange={(event) => setComposerShellAgent(event.target.value)}
+                          className="h-9 w-full rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                        >
+                          <option value="">auto agent</option>
+                          {agentCandidates.map((agent) => (
+                            <option key={agent} value={agent}>
+                              {agent}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <Input
+                          value={composerShellAgent}
+                          onChange={(event) => setComposerShellAgent(event.target.value)}
+                          placeholder="Optional agent id"
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <Textarea
+                      ref={composerTextareaRef}
+                      value={quickPrompt}
+                      onChange={handleComposerInputChange}
+                      onSelect={handleComposerSelectionChange}
+                      onClick={handleComposerSelectionChange}
+                      onKeyDown={handleComposerKeyDown}
+                      placeholder={composerPlaceholder}
+                      className="h-32 resize-none"
+                    />
+
+                    {composerSuggestions.length > 0 && (
+                      <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-1">
+                        {composerSuggestions.map((suggestion, index) => (
+                          <button
+                            key={suggestion.id}
+                            type="button"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              applyComposerSuggestion(suggestion);
+                            }}
+                            onMouseEnter={() => setComposerSuggestionIndex(index)}
+                            className={cn(
+                              'flex w-full items-start justify-between rounded-md px-2 py-1.5 text-left transition-colors',
+                              index === composerSuggestionIndex
+                                ? 'bg-[var(--accent-soft)] text-[var(--text-strong)]'
+                                : 'text-[var(--text-base)] hover:bg-[var(--surface-hover)]'
+                            )}
+                          >
+                            <span className="flex items-center gap-1.5 text-[12px]">
+                              {suggestion.kind === 'slash' ? <Command className="h-3.5 w-3.5" /> : <AtSign className="h-3.5 w-3.5" />}
+                              {suggestion.label}
+                            </span>
+                            <span className="text-[11px] text-[var(--text-weaker)]">{suggestion.detail}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      ref={composerAttachmentInputRef}
+                      type="file"
+                      multiple
+                      onChange={handleComposerAttachmentSelect}
+                      className="hidden"
+                    />
                     <Button
+                      size="sm"
                       variant="secondary"
-                      onClick={handleSendPrompt}
-                      disabled={!activeSessionId || !quickPrompt.trim() || isOperationRunning}
+                      onClick={() => composerAttachmentInputRef.current?.click()}
+                      disabled={composerAttachments.length >= COMPOSER_ATTACHMENT_LIMIT}
                     >
-                      {isOperationRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
-                      Send
+                      <FilePlus2 className="h-3.5 w-3.5" />
+                      Attach Files
+                    </Button>
+                    <p className="text-[11px] text-[var(--text-weaker)]">
+                      Slash: `/prompt` `/async` `/command` `/shell`, mentions: `@file:` `@agent:` `@mcp:`, send: cmd/ctrl
+                      + enter.
+                    </p>
+                  </div>
+
+                  {composerAttachments.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {composerAttachments.map((attachment) => (
+                        <span
+                          key={attachment.id}
+                          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border-weak)] bg-[var(--surface-base)] px-2 py-1 text-[11px] text-[var(--text-base)]"
+                        >
+                          {attachment.file.type.startsWith('image/') ? (
+                            <FileImage className="h-3.5 w-3.5 text-[var(--accent)]" />
+                          ) : (
+                            <FileCode2 className="h-3.5 w-3.5 text-[var(--accent)]" />
+                          )}
+                          <span className="max-w-[140px] truncate">{attachment.file.name}</span>
+                          <span className="text-[var(--text-weaker)]">{formatBytes(attachment.file.size)}</span>
+                          <button
+                            type="button"
+                            aria-label={`Remove attachment ${attachment.file.name}`}
+                            onClick={() => handleRemoveComposerAttachment(attachment.id)}
+                            className="text-[var(--text-weaker)] transition-colors hover:text-[var(--text-strong)]"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-[1fr_auto] items-center gap-2">
+                    <p className="text-[11px] text-[var(--text-weaker)]">
+                      {composerMode === 'shell'
+                        ? 'Shell mode executes command text directly; attachments are disabled for shell runs.'
+                        : 'Text and image attachments are inlined as compact context blocks before dispatch.'}
+                    </p>
+                    <Button variant="secondary" onClick={() => void handleSendPrompt()} disabled={!composerCanSubmit}>
+                      {isOperationRunning ? (
+                        <LoaderCircle className="h-4 w-4 animate-spin" />
+                      ) : composerMode === 'command' ? (
+                        <Command className="h-4 w-4" />
+                      ) : composerMode === 'shell' ? (
+                        <TerminalSquare className="h-4 w-4" />
+                      ) : (
+                        <SendHorizontal className="h-4 w-4" />
+                      )}
+                      {composerSubmitLabel}
                     </Button>
                   </div>
                 </div>

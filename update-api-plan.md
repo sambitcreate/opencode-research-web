@@ -85,11 +85,11 @@ Last updated: February 11, 2026
   - `config`
 
 ### UI
-- [ ] Replace simple prompt textarea with advanced composer.
-- [ ] Add slash command autocomplete.
-- [ ] Add mention autocomplete for `@file`, `@agent`, MCP resources.
-- [ ] Add shell mode + command mode indicators.
-- [ ] Add image/file attachments in composer.
+- [x] Replace simple prompt textarea with advanced composer.
+- [x] Add slash command autocomplete.
+- [x] Add mention autocomplete for `@file`, `@agent`, MCP resources.
+- [x] Add shell mode + command mode indicators.
+- [x] Add image/file attachments in composer.
 - [ ] Add provider connect modal:
   - auth method discovery
   - OAuth authorize/callback
@@ -199,3 +199,9 @@ Last updated: February 11, 2026
   - Added stable validation and action-resolution error envelopes
   - Extended `GET /api/opencode/monitor` with `include=` flags
   - Added normalized optional monitor blocks for `mcp`, `lsp`, `formatter`, `projects`, and `config`
+- [x] 2026-02-11: Completed first P1 composer UI parity slice:
+  - Replaced basic prompt box with a mode-aware advanced composer (`prompt`, `async`, `command`, `shell`)
+  - Added slash command autocomplete for fast mode switching (`/prompt`, `/async`, `/command`, `/shell`)
+  - Added mention autocomplete for `@file`, `@agent`, and `@mcp` resource references
+  - Added explicit command/shell mode indicators and shell agent selection
+  - Added file/image attachments with compact inline context packaging for prompt/command dispatch
