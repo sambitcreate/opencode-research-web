@@ -10,6 +10,9 @@ Primary goal: keep the local query flow stable and transparent.
 ## Core Architecture
 
 - Frontend: `src/app/page.tsx`
+- Global theme tokens + shell styling: `src/app/globals.css`
+- Reusable UI primitives (shadcn-style): `src/components/ui/*`
+- Shared class utility: `src/lib/utils.ts`
 - Query API: `src/app/api/query/route.ts`
 - Engine status API: `src/app/api/opencode/status/route.ts`
 - Session monitor API: `src/app/api/opencode/sessions/route.ts`
@@ -21,6 +24,7 @@ Primary goal: keep the local query flow stable and transparent.
 - Do not remove automatic OpenCode startup on research requests.
 - Do not switch `query` API runtime away from Node (`runtime = 'nodejs'`), because it spawns processes.
 - Avoid destructive git commands unless explicitly requested.
+- Keep the OpenCode-inspired theme system and compact UI density intact unless explicitly asked to redesign.
 
 ## OpenCode Integration Notes
 
@@ -35,6 +39,10 @@ Primary goal: keep the local query flow stable and transparent.
 
 - Keep TypeScript strict-compatible.
 - Keep UI mobile-safe and desktop-safe.
+- Keep the frontend token-driven:
+  - Semantic tokens are defined in `src/app/globals.css` (surface/text/border/status/interactive variables).
+  - Runtime theme definitions are in `src/app/page.tsx`.
+- When introducing new UI controls, prefer primitives in `src/components/ui/*` instead of ad-hoc styled elements.
 - Preserve result contract used by frontend:
   - `id`, `query`, `status`, `sessionId`, `answer`, `sources`, `metadata`, `timestamp`
 - Preserve monitor contracts used by frontend:
