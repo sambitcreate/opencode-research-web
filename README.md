@@ -1,6 +1,6 @@
 # OpenCode Research Website
 
-Local-first research app with a night-themed UI and an auto-managed OpenCode backend.
+Local-first research app with an OpenCode-inspired themed UI and an auto-managed OpenCode backend.
 
 ## Overview
 
@@ -9,6 +9,7 @@ Local-first research app with a night-themed UI and an auto-managed OpenCode bac
 - Backend ensures OpenCode is running, creates a session, submits the query, and returns structured results.
 - UI polls `GET /api/opencode/status` for local engine health.
 - UI also polls OpenCode session APIs to monitor all sessions and inspect per-session message activity.
+- Frontend includes a rebuilt shadcn-style component layer and runtime theme switching (`OC-1`, `Tokyo Night`, `Nord`, `Catppuccin`) with `system/light/dark` scheme control.
 
 ## Prerequisites
 
@@ -45,6 +46,14 @@ The session monitor panel:
 1. Fetches session list from `GET /api/opencode/sessions`.
 2. Lets you select any session.
 3. Fetches details/messages from `GET /api/opencode/sessions?sessionId=<id>`.
+
+## UI and Themes
+
+- The app shell is rebuilt around OpenCode-style semantic tokens (`surface`, `text`, `border`, `interactive`).
+- Theme controls in the header let you:
+  - switch between curated OpenCode-inspired themes,
+  - cycle color scheme mode (`system`, `light`, `dark`).
+- UI primitives live in `src/components/ui/*` and follow shadcn-style composition patterns.
 
 ## Environment Variables
 
@@ -103,6 +112,7 @@ npm run start
 - `src/app/api/opencode/sessions/route.ts` OpenCode session monitor endpoint
 - `src/app/page.tsx` main UI
 - `src/app/globals.css` visual theme and animations
+- `src/components/ui/*` shadcn-style UI primitives
 
 ## Project Docs
 
