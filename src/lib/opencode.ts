@@ -36,6 +36,49 @@ export type OpenCodeStatus = {
   recentLogs: string[];
 };
 
+export type OpenCodeSessionSummary = {
+  id: string;
+  slug: string | null;
+  title: string;
+  directory: string | null;
+  version: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  additions: number;
+  deletions: number;
+  filesChanged: number;
+};
+
+export type OpenCodeSessionList = {
+  running: boolean;
+  host: string;
+  port: number;
+  started: boolean;
+  count: number;
+  sessions: OpenCodeSessionSummary[];
+};
+
+export type OpenCodeSessionMessage = {
+  id: string;
+  role: 'assistant' | 'user' | 'system' | 'tool' | 'unknown';
+  createdAt: string | null;
+  text: string;
+  partTypes: string[];
+  hasRunningToolCall: boolean;
+};
+
+export type OpenCodeSessionDetail = {
+  running: boolean;
+  host: string;
+  port: number;
+  started: boolean;
+  session: OpenCodeSessionSummary;
+  messages: OpenCodeSessionMessage[];
+  messageCount: number;
+  latestMessageAt: string | null;
+  activeToolCalls: number;
+};
+
 function safeParseInt(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
@@ -228,6 +271,142 @@ function uniqueStrings(values: string[]): string[] {
   }
 
   return deduped;
+}
+
+function asRecord(value: unknown): JsonRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as JsonRecord;
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function parseEpochMs(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  return Math.round(value);
+}
+
+function toIsoFromEpochMs(value: unknown): string | null {
+  const epochMs = parseEpochMs(value);
+  if (!epochMs) return null;
+  return new Date(epochMs).toISOString();
+}
+
+function toNonNegativeInteger(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.round(value));
+}
+
+function normalizeRole(value: unknown): OpenCodeSessionMessage['role'] {
+  if (value === 'assistant' || value === 'user' || value === 'system' || value === 'tool') {
+    return value;
+  }
+  return 'unknown';
+}
+
+function mapSessionSummary(value: unknown): (OpenCodeSessionSummary & { sortKey: number }) | null {
+  const record = asRecord(value);
+  if (!record || typeof record.id !== 'string') return null;
+
+  const time = asRecord(record.time);
+  const summary = asRecord(record.summary);
+  const createdEpoch = parseEpochMs(time?.created);
+  const updatedEpoch = parseEpochMs(time?.updated);
+  const sortKey = updatedEpoch ?? createdEpoch ?? 0;
+
+  return {
+    id: record.id,
+    slug: typeof record.slug === 'string' ? record.slug : null,
+    title: typeof record.title === 'string' && record.title.trim() ? record.title : 'Untitled session',
+    directory: typeof record.directory === 'string' ? record.directory : null,
+    version: typeof record.version === 'string' ? record.version : null,
+    createdAt: toIsoFromEpochMs(time?.created),
+    updatedAt: toIsoFromEpochMs(time?.updated),
+    additions: toNonNegativeInteger(summary?.additions),
+    deletions: toNonNegativeInteger(summary?.deletions),
+    filesChanged: toNonNegativeInteger(summary?.files),
+    sortKey
+  };
+}
+
+function mapSessionMessages(value: unknown): OpenCodeSessionMessage[] {
+  const rawMessages = asArray(value);
+  const mapped = rawMessages
+    .map((entry, index) => {
+      const record = asRecord(entry);
+      if (!record) return null;
+
+      const info = asRecord(record.info);
+      const messageTime = asRecord(info?.time);
+      const parts = asArray(record.parts);
+      const partTypes: string[] = [];
+      const textBlocks: string[] = [];
+      let hasRunningToolCall = false;
+
+      for (const part of parts) {
+        const partRecord = asRecord(part);
+        if (!partRecord) continue;
+
+        const partType = typeof partRecord.type === 'string' ? partRecord.type : null;
+        if (partType) partTypes.push(partType);
+
+        if (partType === 'text' && typeof partRecord.text === 'string') {
+          const trimmed = partRecord.text.trim();
+          if (trimmed) textBlocks.push(trimmed);
+        }
+
+        if (partType === 'tool') {
+          const state = asRecord(partRecord.state);
+          const status = typeof state?.status === 'string' ? state.status : null;
+          if (status === 'running') hasRunningToolCall = true;
+
+          const tool = typeof partRecord.tool === 'string' ? partRecord.tool : null;
+          if (tool || status) {
+            textBlocks.push(`[tool ${tool || 'unknown'}: ${status || 'unknown'}]`);
+          }
+        }
+      }
+
+      const mergedText = uniqueStrings(textBlocks).join('\n\n').trim();
+      const preview = mergedText.length > 1800 ? `${mergedText.slice(0, 1800)}...` : mergedText;
+
+      return {
+        id:
+          typeof info?.id === 'string'
+            ? info.id
+            : typeof record.id === 'string'
+              ? record.id
+              : `message-${index + 1}`,
+        role: normalizeRole(info?.role),
+        createdAt: toIsoFromEpochMs(messageTime?.created),
+        text: preview,
+        partTypes: uniqueStrings(partTypes),
+        hasRunningToolCall,
+        order: index
+      };
+    })
+    .filter((entry): entry is OpenCodeSessionMessage & { order: number } => entry !== null);
+
+  mapped.sort((left, right) => {
+    const leftTime = left.createdAt ? new Date(left.createdAt).getTime() : Number.NaN;
+    const rightTime = right.createdAt ? new Date(right.createdAt).getTime() : Number.NaN;
+
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+
+    return left.order - right.order;
+  });
+
+  return mapped.map((message) => ({
+    id: message.id,
+    role: message.role,
+    createdAt: message.createdAt,
+    text: message.text,
+    partTypes: message.partTypes,
+    hasRunningToolCall: message.hasRunningToolCall
+  }));
 }
 
 function extractSources(text: string): string[] {
@@ -518,6 +697,153 @@ async function sendResearchPrompt(query: string): Promise<ResearchPayload> {
     answer,
     sources,
     confidenceScore
+  };
+}
+
+function clampInteger(value: number | undefined, fallback: number, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+export async function getOpenCodeSessions(options?: {
+  limit?: number;
+  ensureRunning?: boolean;
+}): Promise<OpenCodeSessionList> {
+  const host = getHost();
+  const port = getPort();
+  const ensureRunning = options?.ensureRunning === true;
+  const limit = clampInteger(options?.limit, 40, 1, 200);
+  let started = false;
+
+  if (ensureRunning) {
+    const startup = await ensureOpenCodeServer();
+    started = startup.started;
+  }
+
+  const running = await isPortOpen(host, port);
+  if (!running) {
+    return {
+      running: false,
+      host,
+      port,
+      started,
+      count: 0,
+      sessions: []
+    };
+  }
+
+  const sessionResponse = await requestOpenCode(
+    '/session',
+    {
+      method: 'GET'
+    },
+    safeParseInt(process.env.OPENCODE_STATUS_TIMEOUT_MS, 25_000)
+  );
+
+  const sessionPayload = await parseResponseBody(sessionResponse);
+  const mapped = asArray(sessionPayload.raw)
+    .map((entry) => mapSessionSummary(entry))
+    .filter((entry): entry is OpenCodeSessionSummary & { sortKey: number } => entry !== null);
+
+  mapped.sort((left, right) => right.sortKey - left.sortKey);
+
+  return {
+    running: true,
+    host,
+    port,
+    started,
+    count: mapped.length,
+    sessions: mapped.slice(0, limit).map((session) => ({
+      id: session.id,
+      slug: session.slug,
+      title: session.title,
+      directory: session.directory,
+      version: session.version,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      additions: session.additions,
+      deletions: session.deletions,
+      filesChanged: session.filesChanged
+    }))
+  };
+}
+
+export async function getOpenCodeSessionDetail(
+  sessionId: string,
+  options?: {
+    messageLimit?: number;
+    ensureRunning?: boolean;
+  }
+): Promise<OpenCodeSessionDetail> {
+  const host = getHost();
+  const port = getPort();
+  const ensureRunning = options?.ensureRunning === true;
+  const messageLimit = clampInteger(options?.messageLimit, 120, 1, 500);
+  const normalizedSessionId = sessionId.trim();
+
+  if (!normalizedSessionId.startsWith('ses_')) {
+    throw new Error('Invalid OpenCode session id.');
+  }
+
+  let started = false;
+  if (ensureRunning) {
+    const startup = await ensureOpenCodeServer();
+    started = startup.started;
+  }
+
+  if (!(await isPortOpen(host, port))) {
+    throw new Error(`OpenCode is not reachable at ${host}:${port}.`);
+  }
+
+  const [sessionResponse, messagesResponse] = await Promise.all([
+    requestOpenCode(`/session/${encodeURIComponent(normalizedSessionId)}`, {
+      method: 'GET'
+    }),
+    requestOpenCode(
+      `/session/${encodeURIComponent(normalizedSessionId)}/message`,
+      {
+        method: 'GET'
+      },
+      safeParseInt(process.env.OPENCODE_STATUS_TIMEOUT_MS, 25_000)
+    )
+  ]);
+
+  const [sessionPayload, messagesPayload] = await Promise.all([
+    parseResponseBody(sessionResponse),
+    parseResponseBody(messagesResponse)
+  ]);
+
+  const mappedSession = mapSessionSummary(sessionPayload.raw);
+  if (!mappedSession) {
+    throw new Error(`OpenCode did not return a valid session payload for ${normalizedSessionId}.`);
+  }
+
+  const allMessages = mapSessionMessages(messagesPayload.raw);
+  const visibleMessages = allMessages.slice(Math.max(0, allMessages.length - messageLimit));
+  const latestMessageAt = visibleMessages[visibleMessages.length - 1]?.createdAt || mappedSession.updatedAt;
+  const session: OpenCodeSessionSummary = {
+    id: mappedSession.id,
+    slug: mappedSession.slug,
+    title: mappedSession.title,
+    directory: mappedSession.directory,
+    version: mappedSession.version,
+    createdAt: mappedSession.createdAt,
+    updatedAt: mappedSession.updatedAt,
+    additions: mappedSession.additions,
+    deletions: mappedSession.deletions,
+    filesChanged: mappedSession.filesChanged
+  };
+
+  return {
+    running: true,
+    host,
+    port,
+    started,
+    session,
+    messages: visibleMessages,
+    messageCount: allMessages.length,
+    latestMessageAt,
+    activeToolCalls: visibleMessages.filter((message) => message.hasRunningToolCall).length
   };
 }
 
