@@ -128,7 +128,7 @@ Last updated: February 11, 2026
 - [x] Add file explorer/search/read/status module.
 - [x] Add project list/current/update module.
 - [x] Add worktree create/list/remove/reset module.
-- [ ] Add config editor for local + global config with diff/confirm.
+- [x] Add config editor for local + global config with diff/confirm.
 - [ ] Improve permission/question UI with richer typed context.
 - [ ] Expand status panel for LSP + formatter + plugin/config summaries.
 
@@ -231,3 +231,6 @@ Last updated: February 11, 2026
 - [x] 2026-02-11: Added worktree create/list/remove/reset UI module:
   - New Worktree Module panel backed by `/experimental/worktree` and `/experimental/worktree/reset`
   - Supports create/remove/reset JSON payloads and live list refresh
+- [x] 2026-02-11: Added local/global config editor UI module:
+  - New Config Editor panel with local and global JSON drafts
+  - Includes line-change diff indicators and explicit confirm-before-apply flow

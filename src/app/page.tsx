@@ -1030,6 +1030,22 @@ function appendRawQueryParams(params: URLSearchParams, raw: string): void {
   }
 }
 
+function summarizeDraftDiff(base: string, draft: string): { changed: boolean; changedLines: number } {
+  if (base === draft) return { changed: false, changedLines: 0 };
+  const baseLines = base.split('\n');
+  const draftLines = draft.split('\n');
+  const length = Math.max(baseLines.length, draftLines.length);
+  let changedLines = 0;
+
+  for (let index = 0; index < length; index += 1) {
+    if ((baseLines[index] ?? '') !== (draftLines[index] ?? '')) {
+      changedLines += 1;
+    }
+  }
+
+  return { changed: true, changedLines };
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -1623,6 +1639,17 @@ export default function OpenCodeMonitorPage() {
   const [worktreeActionResult, setWorktreeActionResult] = useState<OpenCodeControlResponse | null>(null);
   const [worktreeError, setWorktreeError] = useState<string | null>(null);
   const [isWorktreeBusy, setIsWorktreeBusy] = useState(false);
+
+  const [configLocalBase, setConfigLocalBase] = useState('{}');
+  const [configGlobalBase, setConfigGlobalBase] = useState('{}');
+  const [configLocalDraft, setConfigLocalDraft] = useState('{}');
+  const [configGlobalDraft, setConfigGlobalDraft] = useState('{}');
+  const [configApplyMethod, setConfigApplyMethod] = useState<OpenCodeHttpMethod>('PATCH');
+  const [confirmApplyLocalConfig, setConfirmApplyLocalConfig] = useState(false);
+  const [confirmApplyGlobalConfig, setConfirmApplyGlobalConfig] = useState(false);
+  const [isConfigBusy, setIsConfigBusy] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [configActionResult, setConfigActionResult] = useState<OpenCodeControlResponse | null>(null);
 
   const [themeId, setThemeId] = useState<string>('oc-1');
   const [colorScheme, setColorScheme] = useState<ColorScheme>('system');
@@ -2244,6 +2271,13 @@ export default function OpenCodeMonitorPage() {
   }, [activeSessionId, composerAttachments.length, composerCommand, composerMode, isOperationRunning, quickPrompt]);
 
   const runtimeControlsLocked = isRuntimeControlBusy || isOperationRunning;
+  const configControlsLocked = isConfigBusy || runtimeControlsLocked;
+
+  const localConfigDiff = useMemo(() => summarizeDraftDiff(configLocalBase, configLocalDraft), [configLocalBase, configLocalDraft]);
+  const globalConfigDiff = useMemo(
+    () => summarizeDraftDiff(configGlobalBase, configGlobalDraft),
+    [configGlobalBase, configGlobalDraft]
+  );
 
   useEffect(() => {
     if (composerMode !== 'shell') return;
@@ -3528,6 +3562,98 @@ export default function OpenCodeMonitorPage() {
     }
   }, [refreshWorktreeList, runWorktreeControl, worktreeResetBody]);
 
+  const refreshConfigEditor = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setIsConfigBusy(true);
+    }
+    setConfigError(null);
+
+    try {
+      const response = await fetch('/api/opencode/system?include=config,global/config&autostart=0', {
+        cache: 'no-store'
+      });
+      const payload = (await response.json()) as OpenCodeSystemSnapshotResponse | { error?: string };
+      if (!response.ok) {
+        throw new Error((payload as { error?: string }).error || 'Unable to read config snapshot.');
+      }
+
+      const snapshot = payload as OpenCodeSystemSnapshotResponse;
+      const localData = snapshot.sections?.config?.data ?? {};
+      const globalData = snapshot.sections?.['global/config']?.data ?? {};
+      const localText = prettyJson(localData);
+      const globalText = prettyJson(globalData);
+      setConfigLocalBase(localText);
+      setConfigGlobalBase(globalText);
+      setConfigLocalDraft(localText);
+      setConfigGlobalDraft(globalText);
+      setConfirmApplyLocalConfig(false);
+      setConfirmApplyGlobalConfig(false);
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : 'Unable to read config snapshot.');
+    } finally {
+      if (!options?.silent) {
+        setIsConfigBusy(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshConfigEditor({ silent: true });
+  }, [refreshConfigEditor]);
+
+  const applyConfigDraft = useCallback(
+    async (scope: 'local' | 'global') => {
+      const draft = scope === 'local' ? configLocalDraft : configGlobalDraft;
+      const confirmed = scope === 'local' ? confirmApplyLocalConfig : confirmApplyGlobalConfig;
+      if (!confirmed) {
+        setConfigError(`Confirm ${scope} config apply before submitting.`);
+        return;
+      }
+
+      let parsedBody: unknown;
+      try {
+        parsedBody = JSON.parse(draft);
+      } catch {
+        setConfigError(`${scope} config draft must be valid JSON.`);
+        return;
+      }
+
+      setIsConfigBusy(true);
+      setConfigError(null);
+      setEngineState('booting');
+
+      try {
+        const response = await callControl({
+          path: scope === 'local' ? '/config' : '/global/config',
+          method: configApplyMethod,
+          body: parsedBody
+        });
+        setConfigActionResult(response);
+        if (!response.ok) {
+          throw new Error(response.text || `${scope} config update failed (${response.status}).`);
+        }
+        setEngineState('ready');
+        await refreshMonitor({ silent: true });
+        await refreshConfigEditor({ silent: true });
+      } catch (error) {
+        setConfigError(error instanceof Error ? error.message : `${scope} config update failed.`);
+        setEngineState('error');
+      } finally {
+        setIsConfigBusy(false);
+      }
+    },
+    [
+      callControl,
+      configApplyMethod,
+      configGlobalDraft,
+      configLocalDraft,
+      confirmApplyGlobalConfig,
+      confirmApplyLocalConfig,
+      refreshConfigEditor,
+      refreshMonitor
+    ]
+  );
+
   return (
     <div className="oc-app min-h-screen" style={themeStyle}>
       <div className="mx-auto w-full max-w-[1540px] px-4 py-5 md:px-6 md:py-7">
@@ -4330,6 +4456,108 @@ export default function OpenCodeMonitorPage() {
                     {prettyJson(worktreeActionResult?.data ?? null)}
                   </pre>
                 </details>
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader>
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <MonitorCog className="h-4 w-4 text-[var(--accent)]" />
+                    Config Editor
+                  </CardTitle>
+                  <Button size="sm" variant="secondary" disabled={isConfigBusy} onClick={() => void refreshConfigEditor()}>
+                    <RefreshCw className={cn('h-3.5 w-3.5', isConfigBusy && 'animate-spin')} />
+                    reload
+                  </Button>
+                </div>
+                <CardDescription>Local/global config drafts with line-level diff counts and explicit apply confirmation.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <select
+                  value={configApplyMethod}
+                  onChange={(event) => setConfigApplyMethod(event.target.value as OpenCodeHttpMethod)}
+                  className="h-9 w-full rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                >
+                  <option value="PATCH">PATCH</option>
+                  <option value="POST">POST</option>
+                  <option value="PUT">PUT</option>
+                </select>
+
+                <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="text-[12px] font-medium text-[var(--text-strong)]">Local Config (`/config`)</p>
+                    <Badge>{localConfigDiff.changed ? `${localConfigDiff.changedLines} line changes` : 'no changes'}</Badge>
+                  </div>
+                  <Textarea
+                    value={configLocalDraft}
+                    onChange={(event) => setConfigLocalDraft(event.target.value)}
+                    className="oc-mono h-36 resize-none text-[11px]"
+                  />
+                  <label className="mt-2 flex items-center gap-2 text-[11px] text-[var(--text-weak)]">
+                    <input
+                      type="checkbox"
+                      checked={confirmApplyLocalConfig}
+                      onChange={(event) => setConfirmApplyLocalConfig(event.target.checked)}
+                    />
+                    Confirm apply local config update
+                  </label>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="mt-2"
+                    disabled={configControlsLocked || !localConfigDiff.changed}
+                    onClick={() => void applyConfigDraft('local')}
+                  >
+                    apply local
+                  </Button>
+                </div>
+
+                <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="text-[12px] font-medium text-[var(--text-strong)]">Global Config (`/global/config`)</p>
+                    <Badge>{globalConfigDiff.changed ? `${globalConfigDiff.changedLines} line changes` : 'no changes'}</Badge>
+                  </div>
+                  <Textarea
+                    value={configGlobalDraft}
+                    onChange={(event) => setConfigGlobalDraft(event.target.value)}
+                    className="oc-mono h-36 resize-none text-[11px]"
+                  />
+                  <label className="mt-2 flex items-center gap-2 text-[11px] text-[var(--text-weak)]">
+                    <input
+                      type="checkbox"
+                      checked={confirmApplyGlobalConfig}
+                      onChange={(event) => setConfirmApplyGlobalConfig(event.target.checked)}
+                    />
+                    Confirm apply global config update
+                  </label>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="mt-2"
+                    disabled={configControlsLocked || !globalConfigDiff.changed}
+                    onClick={() => void applyConfigDraft('global')}
+                  >
+                    apply global
+                  </Button>
+                </div>
+
+                {configError && (
+                  <div className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-2.5 text-[12px] text-[var(--critical)]">
+                    {configError}
+                  </div>
+                )}
+
+                {configActionResult && (
+                  <details className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                    <summary className="cursor-pointer text-[12px] font-medium text-[var(--text-strong)]">
+                      config action result ({configActionResult.status})
+                    </summary>
+                    <pre className="oc-scroll oc-mono mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                      {prettyJson(configActionResult.data ?? configActionResult.text)}
+                    </pre>
+                  </details>
+                )}
               </CardContent>
             </Card>
 
