@@ -264,6 +264,41 @@ export type McpServerOption = {
   resources: string[];
 };
 
+export type PermissionContext = {
+  sessionId: string | null;
+  permission: string | null;
+  tool: string | null;
+  command: string | null;
+  prompt: string | null;
+  patterns: string[];
+  alwaysPatterns: string[];
+  metadataLines: string[];
+  toolMessageId: string | null;
+  toolCallId: string | null;
+};
+
+export type QuestionContextOption = {
+  label: string;
+  description: string | null;
+};
+
+export type QuestionContextItem = {
+  header: string | null;
+  question: string;
+  options: QuestionContextOption[];
+  multiple: boolean;
+  custom: boolean;
+};
+
+export type QuestionContext = {
+  sessionId: string | null;
+  title: string | null;
+  options: string[];
+  questions: QuestionContextItem[];
+  toolMessageId: string | null;
+  toolCallId: string | null;
+};
+
 export type CommandPaletteAction = {
   id: string;
   label: string;
@@ -330,4 +365,3 @@ export type SessionOperationDefinition = {
   template: string;
   requiresBody: boolean;
 };
-

@@ -13,7 +13,9 @@ import type {
   ModelOption,
   OpenCodePtySession,
   OpenCodeSessionMessage,
+  PermissionContext,
   ProviderOption,
+  QuestionContext,
   ThemePalette,
   ThemeStyle
 } from './types';
@@ -291,6 +293,76 @@ export function findFirstStringArray(value: unknown, keys: string[], depth = 0):
   return [];
 }
 
+export function findFirstArray(value: unknown, keys: string[], depth = 0): unknown[] {
+  if (!value || depth > 4) return [];
+  const record = asRecord(value);
+  if (!record) return [];
+
+  for (const key of keys) {
+    const candidate = record[key];
+    if (Array.isArray(candidate)) return candidate;
+  }
+
+  for (const nested of Object.values(record)) {
+    if (!nested || typeof nested !== 'object') continue;
+    const found = findFirstArray(nested, keys, depth + 1);
+    if (found.length > 0) return found;
+  }
+
+  return [];
+}
+
+function trimInline(value: string, maxLength = 220): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function summarizeMetadataValue(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const normalized = value.replace(/\s+/g, ' ').trim();
+    return normalized ? trimInline(normalized, 220) : null;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    const primitive = value.filter(
+      (entry): entry is string | number | boolean => typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean'
+    );
+    if (primitive.length > 0) {
+      return trimInline(primitive.slice(0, 6).map((entry) => String(entry)).join(', '), 220);
+    }
+    return `${value.length} item${value.length === 1 ? '' : 's'}`;
+  }
+
+  const record = asRecord(value);
+  if (record) {
+    const keys = Object.keys(record);
+    if (keys.length === 0) return '{}';
+    return `{${keys.slice(0, 5).join(', ')}${keys.length > 5 ? ', ...' : ''}}`;
+  }
+
+  return null;
+}
+
+function summarizeMetadataLines(value: unknown): string[] {
+  const record = asRecord(value);
+  if (!record) return [];
+
+  const lines: string[] = [];
+  for (const [key, nested] of Object.entries(record)) {
+    if (!key.trim()) continue;
+    const summarized = summarizeMetadataValue(nested);
+    if (!summarized) continue;
+    lines.push(`${key}: ${summarized}`);
+    if (lines.length >= 12) break;
+  }
+
+  return lines;
+}
+
 export function summarizeRuntimeService(value: unknown): { entries: number; active: number | null; sampleStatuses: string[] } {
   const records = collectRecords(value);
   if (records.length === 0) {
@@ -321,30 +393,103 @@ export function summarizeRuntimeService(value: unknown): { entries: number; acti
   };
 }
 
-export function summarizePermissionContext(value: unknown): {
-  sessionId: string | null;
-  tool: string | null;
-  command: string | null;
-  prompt: string | null;
-} {
+export function summarizePermissionContext(value: unknown): PermissionContext {
+  const record = asRecord(value);
+  const toolRecord =
+    asRecord(record?.tool) ||
+    asRecord(record?.metadata && asRecord(record.metadata)?.tool) ||
+    null;
+  const metadata = record?.metadata;
+  const patterns = toUniqueStrings(
+    [
+      ...findFirstStringArray(value, ['patterns']),
+      ...(findFirstString(value, ['pattern']) ? [findFirstString(value, ['pattern']) as string] : [])
+    ],
+    24
+  );
+  const alwaysPatterns = toUniqueStrings(findFirstStringArray(value, ['always']), 24);
+
   return {
     sessionId: findFirstString(value, ['sessionID', 'sessionId', 'session_id']),
+    permission: findFirstString(value, ['permission']),
     tool: findFirstString(value, ['tool', 'toolName']),
     command: findFirstString(value, ['command', 'action', 'path']),
-    prompt: findFirstString(value, ['prompt', 'reason', 'message', 'title'])
+    prompt: findFirstString(value, ['prompt', 'reason', 'message', 'title']),
+    patterns,
+    alwaysPatterns,
+    metadataLines: summarizeMetadataLines(metadata),
+    toolMessageId: toolRecord ? extractString(toolRecord, ['messageID', 'messageId']) : null,
+    toolCallId: toolRecord ? extractString(toolRecord, ['callID', 'callId']) : null
   };
 }
 
-export function summarizeQuestionContext(value: unknown): {
-  sessionId: string | null;
-  title: string | null;
-  options: string[];
-} {
+export function summarizeQuestionContext(value: unknown): QuestionContext {
+  const questionRecords = findFirstArray(value, ['questions'])
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => entry !== null);
+
+  const questions = questionRecords.map((questionRecord, index) => {
+    const optionEntries = Array.isArray(questionRecord.options) ? questionRecord.options : [];
+    const options = optionEntries
+      .map((entry) => {
+        if (typeof entry === 'string') {
+          const label = entry.trim();
+          if (!label) return null;
+          return { label, description: null };
+        }
+        const optionRecord = asRecord(entry);
+        if (!optionRecord) return null;
+        const label = extractString(optionRecord, ['label', 'name', 'value', 'title']);
+        if (!label) return null;
+        return {
+          label,
+          description: extractString(optionRecord, ['description', 'detail', 'help'])
+        };
+      })
+      .filter((entry): entry is { label: string; description: string | null } => entry !== null);
+
+    const header = extractString(questionRecord, ['header', 'title', 'label']);
+    const questionText = extractString(questionRecord, ['question', 'prompt', 'message', 'text']) || header || `Question ${index + 1}`;
+
+    return {
+      header,
+      question: questionText,
+      options,
+      multiple: questionRecord.multiple === true,
+      custom: questionRecord.custom !== false
+    };
+  });
+
+  const rootRecord = asRecord(value);
+  const toolRecord = asRecord(rootRecord?.tool);
+  const title = questions[0]?.question || findFirstString(value, ['question', 'prompt', 'title', 'message', 'text']);
+
   return {
     sessionId: findFirstString(value, ['sessionID', 'sessionId', 'session_id']),
-    title: findFirstString(value, ['question', 'prompt', 'title', 'message', 'text']),
-    options: toUniqueStrings(findFirstStringArray(value, ['options', 'choices', 'answers']), 12)
+    title,
+    options: toUniqueStrings(
+      questions.flatMap((question) => question.options.map((option) => option.label)),
+      24
+    ),
+    questions,
+    toolMessageId: toolRecord ? extractString(toolRecord, ['messageID', 'messageId']) : null,
+    toolCallId: toolRecord ? extractString(toolRecord, ['callID', 'callId']) : null
   };
+}
+
+export function buildQuestionReplyTemplate(
+  context: QuestionContext,
+  strategy: 'empty' | 'first-option' = 'empty'
+): string {
+  const answers = context.questions.map((question) => {
+    if (strategy === 'first-option') {
+      const first = question.options[0]?.label;
+      return first ? [first] : [];
+    }
+    return [];
+  });
+
+  return prettyJson({ answers });
 }
 
 export function mergeModelOptions(models: ModelOption[]): ModelOption[] {

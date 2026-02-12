@@ -190,7 +190,7 @@ Last updated: February 12, 2026
 - [x] Manage sessions end-to-end in web UI:
   - create/select/search/fork/share/rename/archive/delete/undo/redo/summarize
 - [ ] Send prompts in normal/command/shell paths with mentions and attachments.
-- [ ] Handle permission and question prompts with full context.
+- [x] Handle permission and question prompts with full context.
 - [ ] Manage provider auth, models, agents, and variants.
 - [ ] Manage MCP connections/auth/resources.
 - [ ] Inspect todos/diffs/messages/timeline and export transcripts.
@@ -199,6 +199,11 @@ Last updated: February 12, 2026
 
 ## Done Log
 
+- [x] 2026-02-12: Expanded permission/question queue context handling for safer operator actions:
+  - Enhanced permission context extraction to include permission name, patterns, always-allow candidates, metadata summaries, and tool call IDs
+  - Enhanced question context extraction to include per-question headers/text/options and tool call IDs
+  - Added reply template actions for questions (`empty`, `first options`) and used context-based default JSON payloads for reply submission
+  - Verified with `npm run lint` and `npm run build -- --webpack`
 - [x] 2026-02-12: Added session quick-action controls in dashboard session detail pane:
   - Added focused controls for `rename`, `share`, `unshare`, `summarize`, `archive`, and `delete` alongside existing `undo`/`redo`
   - Added session share-link surfacing + copy-link affordance when `/session/:id/share` returns a URL

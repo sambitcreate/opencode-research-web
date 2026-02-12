@@ -113,6 +113,7 @@ const {
   summarizeRuntimeService,
   summarizePermissionContext,
   summarizeQuestionContext,
+  buildQuestionReplyTemplate,
   extractProviderOptions,
   extractMcpServers,
   extractPtySessions,
@@ -2088,12 +2089,12 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
     }
   };
 
-  const handleQuestionReply = async (requestId: string) => {
+  const handleQuestionReply = async (requestId: string, fallbackReplyBody?: string) => {
     setIsOperationRunning(true);
     setOperationError(null);
     setEngineState('booting');
     try {
-      const text = questionReplies[requestId]?.trim() || '{"answers": []}';
+      const text = questionReplies[requestId]?.trim() || fallbackReplyBody || '{"answers": []}';
       const body = JSON.parse(text) as unknown;
       const response = await callControl({
         path: `/question/${encodeURIComponent(requestId)}/reply`,
@@ -4552,12 +4553,49 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
                       <p className="oc-mono text-[11px] text-[var(--text-weak)]">{requestId}</p>
                       <div className="mt-2 grid gap-1 text-[11px] text-[var(--text-weaker)] sm:grid-cols-2">
                         <p>session: {context.sessionId || 'n/a'}</p>
-                        <p>tool: {context.tool || 'n/a'}</p>
+                        <p>permission: {context.permission || context.tool || 'n/a'}</p>
+                        {(context.toolMessageId || context.toolCallId) && (
+                          <p className="sm:col-span-2">
+                            tool call: {context.toolMessageId || 'n/a'} / {context.toolCallId || 'n/a'}
+                          </p>
+                        )}
                         <p className="sm:col-span-2">command/path: {context.command || 'n/a'}</p>
                         {context.prompt && (
                           <p className="sm:col-span-2 rounded-md border border-[var(--border-weak)] bg-[var(--surface-raised)] px-2 py-1 text-[var(--text-base)]">
                             {context.prompt}
                           </p>
+                        )}
+                        {context.patterns.length > 0 && (
+                          <div className="sm:col-span-2">
+                            <p className="mb-1">patterns</p>
+                            <div className="flex flex-wrap gap-1">
+                              {context.patterns.slice(0, 12).map((pattern) => (
+                                <Badge key={`${requestId}-pattern-${pattern}`}>{pattern}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {context.alwaysPatterns.length > 0 && (
+                          <div className="sm:col-span-2">
+                            <p className="mb-1">always-allow candidates</p>
+                            <div className="flex flex-wrap gap-1">
+                              {context.alwaysPatterns.slice(0, 12).map((pattern) => (
+                                <Badge key={`${requestId}-always-${pattern}`}>{pattern}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {context.metadataLines.length > 0 && (
+                          <div className="sm:col-span-2 rounded-md border border-[var(--border-weak)] bg-[var(--surface-raised)] px-2 py-1">
+                            <p className="mb-1 text-[10px] uppercase tracking-wide text-[var(--text-weaker)]">metadata</p>
+                            <div className="space-y-1">
+                              {context.metadataLines.slice(0, 8).map((line) => (
+                                <p key={`${requestId}-meta-${line}`} className="oc-mono text-[11px] text-[var(--text-base)]">
+                                  {line}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
                         )}
                       </div>
                       <Input
@@ -4623,17 +4661,47 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
                 {questions.map((request, index) => {
                   const requestId = extractIdentifier(request) || `question-${index + 1}`;
                   const context = summarizeQuestionContext(request);
+                  const emptyReplyTemplate = buildQuestionReplyTemplate(context, 'empty');
+                  const firstOptionReplyTemplate = buildQuestionReplyTemplate(context, 'first-option');
+                  const replyDraft = questionReplies[requestId] ?? emptyReplyTemplate;
+                  const hasQuestionOptions = context.questions.some((question) => question.options.length > 0);
                   return (
                     <div key={requestId} className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
                       <p className="oc-mono text-[11px] text-[var(--text-weak)]">{requestId}</p>
                       <div className="mt-2 space-y-1 text-[11px] text-[var(--text-weaker)]">
                         <p>session: {context.sessionId || 'n/a'}</p>
+                        {(context.toolMessageId || context.toolCallId) && (
+                          <p>
+                            tool call: {context.toolMessageId || 'n/a'} / {context.toolCallId || 'n/a'}
+                          </p>
+                        )}
                         {context.title && (
                           <p className="rounded-md border border-[var(--border-weak)] bg-[var(--surface-raised)] px-2 py-1 text-[var(--text-base)]">
                             {context.title}
                           </p>
                         )}
-                        {context.options.length > 0 && (
+                        {context.questions.length > 0 &&
+                          context.questions.map((question, questionIndex) => (
+                            <div
+                              key={`${requestId}-q-${questionIndex + 1}`}
+                              className="rounded-md border border-[var(--border-weak)] bg-[var(--surface-raised)] px-2 py-1"
+                            >
+                              <p className="text-[var(--text-base)]">
+                                {question.header ? `${question.header}: ` : ''}
+                                {question.question}
+                              </p>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {question.multiple && <Badge>multi-select</Badge>}
+                                {!question.custom && <Badge>fixed options</Badge>}
+                                {question.options.slice(0, 8).map((option) => (
+                                  <Badge key={`${requestId}-question-${questionIndex + 1}-${option.label}`}>
+                                    {option.label}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        {context.questions.length === 0 && context.options.length > 0 && (
                           <div className="flex flex-wrap gap-1">
                             {context.options.slice(0, 8).map((option) => (
                               <Badge key={`${requestId}-${option}`}>{option}</Badge>
@@ -4641,8 +4709,36 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
                           </div>
                         )}
                       </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={isOperationRunning}
+                          onClick={() =>
+                            setQuestionReplies((prev) => ({
+                              ...prev,
+                              [requestId]: emptyReplyTemplate
+                            }))
+                          }
+                        >
+                          template: empty
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={!hasQuestionOptions || isOperationRunning}
+                          onClick={() =>
+                            setQuestionReplies((prev) => ({
+                              ...prev,
+                              [requestId]: firstOptionReplyTemplate
+                            }))
+                          }
+                        >
+                          template: first options
+                        </Button>
+                      </div>
                       <Textarea
-                        value={questionReplies[requestId] || '{"answers": []}'}
+                        value={replyDraft}
                         onChange={(event) =>
                           setQuestionReplies((prev) => ({
                             ...prev,
@@ -4650,13 +4746,14 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
                           }))
                         }
                         className="oc-mono mt-2 h-24 resize-none text-[11px]"
+                        placeholder='Reply JSON (example: {"answers":[["yes"]]})'
                       />
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <Button
                           size="sm"
                           variant="secondary"
                           disabled={isOperationRunning}
-                          onClick={() => void handleQuestionReply(requestId)}
+                          onClick={() => void handleQuestionReply(requestId, emptyReplyTemplate)}
                         >
                           reply
                         </Button>
