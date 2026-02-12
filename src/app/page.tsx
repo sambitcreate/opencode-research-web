@@ -1617,6 +1617,13 @@ export default function OpenCodeMonitorPage() {
   const [projectUpdateBody, setProjectUpdateBody] = useState('{\n  "id": ""\n}');
   const [selectedProjectCandidate, setSelectedProjectCandidate] = useState('');
 
+  const [worktreeRequestBody, setWorktreeRequestBody] = useState('{\n  "name": "feature-worktree"\n}');
+  const [worktreeResetBody, setWorktreeResetBody] = useState('{\n  "name": "feature-worktree"\n}');
+  const [worktreeListResult, setWorktreeListResult] = useState<OpenCodeControlResponse | null>(null);
+  const [worktreeActionResult, setWorktreeActionResult] = useState<OpenCodeControlResponse | null>(null);
+  const [worktreeError, setWorktreeError] = useState<string | null>(null);
+  const [isWorktreeBusy, setIsWorktreeBusy] = useState(false);
+
   const [themeId, setThemeId] = useState<string>('oc-1');
   const [colorScheme, setColorScheme] = useState<ColorScheme>('system');
   const [systemPrefersDark, setSystemPrefersDark] = useState(true);
@@ -3402,6 +3409,125 @@ export default function OpenCodeMonitorPage() {
     }
   }, [projectUpdateBody, refreshProjectSnapshot, runRuntimeControl]);
 
+  const runWorktreeControl = useCallback(
+    async (input: { path: string; method: OpenCodeHttpMethod; body?: unknown }): Promise<OpenCodeControlResponse | null> => {
+      if (runtimeControlsLocked) {
+        setWorktreeError('Another operation is in flight. Try again shortly.');
+        return null;
+      }
+
+      setIsWorktreeBusy(true);
+      setWorktreeError(null);
+      setEngineState('booting');
+
+      try {
+        const response = await callControl({
+          path: input.path,
+          method: input.method,
+          body: input.body
+        });
+
+        if (!response.ok) {
+          throw new Error(response.text || `Worktree request failed (${response.status}).`);
+        }
+
+        setEngineState('ready');
+        await refreshMonitor({ silent: true });
+        return response;
+      } catch (error) {
+        setWorktreeError(error instanceof Error ? error.message : 'Worktree operation failed.');
+        setEngineState('error');
+        return null;
+      } finally {
+        setIsWorktreeBusy(false);
+      }
+    },
+    [callControl, refreshMonitor, runtimeControlsLocked]
+  );
+
+  const refreshWorktreeList = useCallback(async () => {
+    const response = await runWorktreeControl({
+      path: '/experimental/worktree',
+      method: 'GET'
+    });
+    if (response) {
+      setWorktreeListResult(response);
+    }
+  }, [runWorktreeControl]);
+
+  useEffect(() => {
+    void refreshWorktreeList();
+  }, [refreshWorktreeList]);
+
+  const handleCreateWorktree = useCallback(async () => {
+    let body: unknown = {};
+    const trimmed = worktreeRequestBody.trim();
+    if (trimmed) {
+      try {
+        body = JSON.parse(trimmed) as unknown;
+      } catch {
+        setWorktreeError('Create worktree payload must be valid JSON.');
+        return;
+      }
+    }
+
+    const response = await runWorktreeControl({
+      path: '/experimental/worktree',
+      method: 'POST',
+      body
+    });
+    if (response) {
+      setWorktreeActionResult(response);
+      await refreshWorktreeList();
+    }
+  }, [refreshWorktreeList, runWorktreeControl, worktreeRequestBody]);
+
+  const handleRemoveWorktree = useCallback(async () => {
+    let body: unknown = {};
+    const trimmed = worktreeRequestBody.trim();
+    if (trimmed) {
+      try {
+        body = JSON.parse(trimmed) as unknown;
+      } catch {
+        setWorktreeError('Remove worktree payload must be valid JSON.');
+        return;
+      }
+    }
+
+    const response = await runWorktreeControl({
+      path: '/experimental/worktree',
+      method: 'DELETE',
+      body
+    });
+    if (response) {
+      setWorktreeActionResult(response);
+      await refreshWorktreeList();
+    }
+  }, [refreshWorktreeList, runWorktreeControl, worktreeRequestBody]);
+
+  const handleResetWorktree = useCallback(async () => {
+    let body: unknown = {};
+    const trimmed = worktreeResetBody.trim();
+    if (trimmed) {
+      try {
+        body = JSON.parse(trimmed) as unknown;
+      } catch {
+        setWorktreeError('Reset worktree payload must be valid JSON.');
+        return;
+      }
+    }
+
+    const response = await runWorktreeControl({
+      path: '/experimental/worktree/reset',
+      method: 'POST',
+      body
+    });
+    if (response) {
+      setWorktreeActionResult(response);
+      await refreshWorktreeList();
+    }
+  }, [refreshWorktreeList, runWorktreeControl, worktreeResetBody]);
+
   return (
     <div className="oc-app min-h-screen" style={themeStyle}>
       <div className="mx-auto w-full max-w-[1540px] px-4 py-5 md:px-6 md:py-7">
@@ -4138,6 +4264,70 @@ export default function OpenCodeMonitorPage() {
                   </summary>
                   <pre className="oc-scroll oc-mono mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
                     {prettyJson(projectCurrentSection?.data ?? null)}
+                  </pre>
+                </details>
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader>
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <RotateCw className="h-4 w-4 text-[var(--accent)]" />
+                    Worktree Module
+                  </CardTitle>
+                  <Button size="sm" variant="secondary" disabled={isWorktreeBusy} onClick={() => void refreshWorktreeList()}>
+                    <RefreshCw className={cn('h-3.5 w-3.5', isWorktreeBusy && 'animate-spin')} />
+                    refresh
+                  </Button>
+                </div>
+                <CardDescription>Manage experimental worktrees: list, create, remove, and reset.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Textarea
+                  value={worktreeRequestBody}
+                  onChange={(event) => setWorktreeRequestBody(event.target.value)}
+                  className="oc-mono h-24 resize-none text-[11px]"
+                  placeholder='Create/remove payload JSON (example: {"name":"feature-worktree"})'
+                />
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Button size="sm" variant="secondary" disabled={isWorktreeBusy} onClick={() => void handleCreateWorktree()}>
+                    create
+                  </Button>
+                  <Button size="sm" variant="secondary" disabled={isWorktreeBusy} onClick={() => void handleRemoveWorktree()}>
+                    remove
+                  </Button>
+                </div>
+
+                <Textarea
+                  value={worktreeResetBody}
+                  onChange={(event) => setWorktreeResetBody(event.target.value)}
+                  className="oc-mono h-20 resize-none text-[11px]"
+                  placeholder='Reset payload JSON (example: {"name":"feature-worktree"})'
+                />
+
+                <Button size="sm" variant="secondary" disabled={isWorktreeBusy} onClick={() => void handleResetWorktree()}>
+                  reset
+                </Button>
+
+                {worktreeError && (
+                  <div className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-2.5 text-[12px] text-[var(--critical)]">
+                    {worktreeError}
+                  </div>
+                )}
+
+                <details className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                  <summary className="cursor-pointer text-[12px] font-medium text-[var(--text-strong)]">worktree list</summary>
+                  <pre className="oc-scroll oc-mono mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                    {prettyJson(worktreeListResult?.data ?? null)}
+                  </pre>
+                </details>
+
+                <details className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                  <summary className="cursor-pointer text-[12px] font-medium text-[var(--text-strong)]">last worktree action</summary>
+                  <pre className="oc-scroll oc-mono mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                    {prettyJson(worktreeActionResult?.data ?? null)}
                   </pre>
                 </details>
               </CardContent>
