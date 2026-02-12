@@ -1,6 +1,6 @@
 # OpenCode Full Monitor Parity TODO Tracker (API + UI)
 
-Last updated: February 11, 2026
+Last updated: February 12, 2026
 
 ## How to use this file
 
@@ -153,6 +153,26 @@ Last updated: February 11, 2026
 - [x] Add compatibility checks when OpenCode API evolves.
 - [x] Keep monitor payload size bounded (include flags + lazy loads).
 
+## UI IA Split (Dashboard vs Settings)
+
+- [x] Add a dedicated `/settings` route and a clear nav affordance from `/`.
+- [x] Keep `/` focused on active research flow:
+  - engine/session status
+  - composer and prompt execution
+  - timeline/transcript/message inspection
+  - event debug visibility used during live runs
+- [x] Move advanced/operator panels from `/` to `/settings`:
+  - theme + color scheme controls
+  - provider connect/auth + model/agent controls
+  - MCP panel
+  - project/worktree/config modules
+  - PTY terminal lifecycle/stream controls
+  - permission/question queues
+  - TUI controls
+  - raw API explorer and high-impact session mutation runner
+- [x] Preserve all existing endpoint contracts while relocating UI surfaces.
+- [x] Re-run lint/build and smoke endpoints after route split.
+
 ## Validation Checklist (Run Per Meaningful Change)
 
 - [x] `npm run lint`
@@ -179,6 +199,13 @@ Last updated: February 11, 2026
 
 ## Done Log
 
+- [x] 2026-02-12: Implemented dashboard/settings route split with staged UI relocation:
+  - Added shared shell component `src/components/opencode-monitor-shell.tsx` and route wrappers for `/` and `/settings`
+  - Added in-app route affordance between Dashboard and Settings views
+  - Kept core research loop on `/` (session monitor, session controls/composer, event stream, file explorer)
+  - Moved advanced/admin controls behind settings mode (theme/scheme, runtime/provider, project/worktree/config, MCP, permission/question, TUI, API explorer)
+  - Kept API payload contracts unchanged; verified with `npm run lint` and `npm run build -- --webpack`
+- [x] 2026-02-12: Audited oversized root UI and documented dashboard vs settings migration boundaries (planning/docs only; no runtime behavior changes in this step).
 - [x] 2026-02-12: Refactored oversized monitor/runtime modules without changing API/UI contracts:
   - Extracted monitor page shared model code into `src/lib/opencode-monitor/{types,constants,utils}.ts`
   - Slimmed `src/app/page.tsx` by importing shared monitor symbols/types from `src/lib/opencode-monitor-page-shared.ts`

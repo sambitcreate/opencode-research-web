@@ -5,6 +5,9 @@ Local-first OpenCode control plane for monitoring and executing OpenCode operati
 ## Overview
 
 - Runs on localhost by design.
+- UI is split by intent:
+  - `/` for the core research loop (sessions, composer, timeline/transcript, event stream)
+  - `/settings` for advanced/operator controls (provider/MCP/project/worktree/config/PTY/TUI/API explorer)
 - Monitors OpenCode runtime, sessions, status map, pending permissions/questions, providers, agents, skills, and command metadata.
 - Supports direct control of OpenCode via a generic backend proxy route (`/api/opencode/control`) for any OpenCode API path/method.
 - Includes monitor-first UI modules:
@@ -49,6 +52,7 @@ npm run dev
 ```
 
 Open `http://localhost:3000`.
+Open `http://localhost:3000/settings` for advanced runtime/operator controls.
 
 ## Local OpenCode Flow
 
@@ -69,7 +73,7 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
 ## UI and Themes
 
 - The app shell keeps the OpenCode-inspired semantic token system (`surface`, `text`, `border`, `interactive`).
-- Runtime theme switcher is still available (`OC-1`, `Tokyo Night`, `Nord`, `Catppuccin`) with `system/light/dark` scheme control.
+- Runtime theme switcher (`OC-1`, `Tokyo Night`, `Nord`, `Catppuccin`) and `system/light/dark` scheme control live in `/settings`.
 - UI primitives remain in `src/components/ui/*`.
 
 ## Environment Variables

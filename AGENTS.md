@@ -9,10 +9,13 @@ Primary goal: keep the local query flow stable and transparent.
 
 ## Core Architecture
 
-- Frontend: `src/app/page.tsx`
+- Primary dashboard route: `src/app/page.tsx`
+- Settings/admin route: `src/app/settings/page.tsx`
+- Shared monitor UI shell: `src/components/opencode-monitor-shell.tsx`
 - Global theme tokens + shell styling: `src/app/globals.css`
 - Reusable UI primitives (shadcn-style): `src/components/ui/*`
 - Shared class utility: `src/lib/utils.ts`
+- Monitor page shared modules: `src/lib/opencode-monitor/*`
 - Query API: `src/app/api/query/route.ts`
 - Engine status API: `src/app/api/opencode/status/route.ts`
 - Session monitor API: `src/app/api/opencode/sessions/route.ts`
@@ -30,6 +33,24 @@ Primary goal: keep the local query flow stable and transparent.
 - Avoid destructive git commands unless explicitly requested.
 - Keep the OpenCode-inspired theme system and compact UI density intact unless explicitly asked to redesign.
 
+## UI Surface Boundaries
+
+- Keep `/` (dashboard) focused on the core research loop:
+  - engine/session visibility
+  - composer + prompt send flow
+  - session timeline/transcript/message inspection
+  - event/debug visibility needed during active research
+- Move advanced/administrative controls to `/settings` when possible:
+  - theme/scheme customization
+  - provider auth + model/agent configuration
+  - MCP controls
+  - project/worktree/config editors
+  - PTY terminal controls
+  - permission/question queues
+  - TUI shortcut execution
+  - raw OpenCode API explorer and high-impact mutation tools
+- Avoid duplicating complex control surfaces across both pages unless there is a clear workflow reason.
+
 ## OpenCode Integration Notes
 
 - Default startup path is `opencode serve --hostname 127.0.0.1 --port 4096`.
@@ -46,9 +67,11 @@ Primary goal: keep the local query flow stable and transparent.
 
 - Keep TypeScript strict-compatible.
 - Keep UI mobile-safe and desktop-safe.
+- Prefer dashboard simplification over adding new advanced cards to `/`.
+- If adding admin/operator controls, place them in `/settings` first unless they are required in the primary research loop.
 - Keep the frontend token-driven:
   - Semantic tokens are defined in `src/app/globals.css` (surface/text/border/status/interactive variables).
-  - Runtime theme definitions are in `src/app/page.tsx`.
+  - Runtime theme definitions are in `src/components/opencode-monitor-shell.tsx`.
 - When introducing new UI controls, prefer primitives in `src/components/ui/*` instead of ad-hoc styled elements.
 - Preserve result contract used by frontend:
   - `id`, `query`, `status`, `sessionId`, `answer`, `sources`, `metadata`, `timestamp`
