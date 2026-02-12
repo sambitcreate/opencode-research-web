@@ -126,7 +126,7 @@ Last updated: February 11, 2026
 
 ### UI
 - [x] Add file explorer/search/read/status module.
-- [ ] Add project list/current/update module.
+- [x] Add project list/current/update module.
 - [ ] Add worktree create/list/remove/reset module.
 - [ ] Add config editor for local + global config with diff/confirm.
 - [ ] Improve permission/question UI with richer typed context.
@@ -225,3 +225,6 @@ Last updated: February 11, 2026
 - [x] 2026-02-11: Added file explorer/search/read/status UI module:
   - New File Explorer panel in dashboard backed by `/api/opencode/files`
   - Supports `findText`, `findFile`, `list`, `content`, and `status` with optional extra query params
+- [x] 2026-02-11: Added project list/current/update UI module:
+  - New Project Module panel backed by `/api/opencode/system?include=project,project/current`
+  - Supports prefilled JSON updates to `POST /project/current` and live snapshot refresh

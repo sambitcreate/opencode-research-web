@@ -157,6 +157,13 @@ type OpenCodeFilesResponse = {
   result: OpenCodeControlResponse;
 };
 
+type OpenCodeSystemSnapshotResponse = {
+  status: OpenCodeStatus;
+  include: string[];
+  sections: Record<string, OpenCodeControlResponse>;
+  errors: string[];
+};
+
 type OpenCodeMonitorSnapshot = {
   status: OpenCodeStatus;
   sessions: OpenCodeSessionsResponse;
@@ -1604,6 +1611,12 @@ export default function OpenCodeMonitorPage() {
   const [fileError, setFileError] = useState<string | null>(null);
   const [isFileRunning, setIsFileRunning] = useState(false);
 
+  const [systemSnapshot, setSystemSnapshot] = useState<OpenCodeSystemSnapshotResponse | null>(null);
+  const [isSystemSnapshotLoading, setIsSystemSnapshotLoading] = useState(false);
+  const [systemSnapshotError, setSystemSnapshotError] = useState<string | null>(null);
+  const [projectUpdateBody, setProjectUpdateBody] = useState('{\n  "id": ""\n}');
+  const [selectedProjectCandidate, setSelectedProjectCandidate] = useState('');
+
   const [themeId, setThemeId] = useState<string>('oc-1');
   const [colorScheme, setColorScheme] = useState<ColorScheme>('system');
   const [systemPrefersDark, setSystemPrefersDark] = useState(true);
@@ -2273,6 +2286,33 @@ export default function OpenCodeMonitorPage() {
 
   const fileModeUsesQuery = fileMode === 'findText' || fileMode === 'findFile';
   const fileModeUsesPath = fileMode === 'list' || fileMode === 'content' || fileMode === 'status';
+
+  const projectListSection = useMemo(() => {
+    return systemSnapshot?.sections?.project ?? null;
+  }, [systemSnapshot?.sections]);
+
+  const projectCurrentSection = useMemo(() => {
+    return systemSnapshot?.sections?.['project/current'] ?? null;
+  }, [systemSnapshot?.sections]);
+
+  const projectCandidates = useMemo(() => {
+    return toUniqueStrings(
+      [
+        ...collectStringFields(projectListSection?.data, ['id', 'projectID', 'projectId', 'name', 'title', 'path']),
+        ...collectStringFields(projectCurrentSection?.data, ['id', 'projectID', 'projectId', 'name', 'title', 'path'])
+      ].filter((value) => value.length <= 220),
+      120
+    );
+  }, [projectCurrentSection?.data, projectListSection?.data]);
+
+  useEffect(() => {
+    if (projectCandidates.length === 0) {
+      if (selectedProjectCandidate) setSelectedProjectCandidate('');
+      return;
+    }
+    if (projectCandidates.includes(selectedProjectCandidate)) return;
+    setSelectedProjectCandidate(projectCandidates[0]);
+  }, [projectCandidates, selectedProjectCandidate]);
 
   useEffect(() => {
     if (!selectedApiMethods.includes(apiMethod)) {
@@ -3303,6 +3343,65 @@ export default function OpenCodeMonitorPage() {
     }
   };
 
+  const refreshProjectSnapshot = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setIsSystemSnapshotLoading(true);
+    }
+    setSystemSnapshotError(null);
+
+    try {
+      const response = await fetch('/api/opencode/system?include=project,project/current&autostart=0', {
+        cache: 'no-store'
+      });
+      const payload = (await response.json()) as OpenCodeSystemSnapshotResponse | { error?: string };
+      if (!response.ok) {
+        throw new Error((payload as { error?: string }).error || 'Failed to load project snapshot.');
+      }
+      setSystemSnapshot(payload as OpenCodeSystemSnapshotResponse);
+    } catch (error) {
+      setSystemSnapshotError(error instanceof Error ? error.message : 'Unable to load project snapshot.');
+    } finally {
+      if (!options?.silent) {
+        setIsSystemSnapshotLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshProjectSnapshot({ silent: true });
+  }, [refreshProjectSnapshot]);
+
+  const handlePrefillProjectUpdate = () => {
+    if (!selectedProjectCandidate.trim()) return;
+    setProjectUpdateBody(
+      `{
+  "id": "${selectedProjectCandidate.replaceAll('"', '\\"')}"
+}`
+    );
+  };
+
+  const handleUpdateCurrentProject = useCallback(async () => {
+    let body: unknown = {};
+    const trimmed = projectUpdateBody.trim();
+    if (trimmed) {
+      try {
+        body = JSON.parse(trimmed) as unknown;
+      } catch {
+        setSystemSnapshotError('Project update body must be valid JSON.');
+        return;
+      }
+    }
+
+    const result = await runRuntimeControl({
+      path: '/project/current',
+      method: 'POST',
+      body
+    });
+    if (result?.ok) {
+      await refreshProjectSnapshot({ silent: true });
+    }
+  }, [projectUpdateBody, refreshProjectSnapshot, runRuntimeControl]);
+
   return (
     <div className="oc-app min-h-screen" style={themeStyle}>
       <div className="mx-auto w-full max-w-[1540px] px-4 py-5 md:px-6 md:py-7">
@@ -3959,6 +4058,88 @@ export default function OpenCodeMonitorPage() {
                     )}
                   </div>
                 )}
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader>
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <Database className="h-4 w-4 text-[var(--accent)]" />
+                    Project Module
+                  </CardTitle>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={isSystemSnapshotLoading}
+                    onClick={() => void refreshProjectSnapshot()}
+                  >
+                    <RefreshCw className={cn('h-3.5 w-3.5', isSystemSnapshotLoading && 'animate-spin')} />
+                    refresh
+                  </Button>
+                </div>
+                <CardDescription>List/current project inspection and current project update actions.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex flex-wrap gap-1.5">
+                  <Badge>{projectCandidates.length} project candidates</Badge>
+                  {systemSnapshot?.errors?.length ? <Badge>{systemSnapshot.errors.length} system errors</Badge> : <Badge>system ok</Badge>}
+                </div>
+
+                <select
+                  value={selectedProjectCandidate}
+                  onChange={(event) => setSelectedProjectCandidate(event.target.value)}
+                  className="h-9 w-full rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                >
+                  {projectCandidates.length === 0 && <option value="">no project metadata</option>}
+                  {projectCandidates.map((candidate) => (
+                    <option key={candidate} value={candidate}>
+                      {candidate}
+                    </option>
+                  ))}
+                </select>
+
+                <div className="grid grid-cols-[auto_1fr] gap-2">
+                  <Button size="sm" variant="secondary" disabled={!selectedProjectCandidate} onClick={handlePrefillProjectUpdate}>
+                    prefill
+                  </Button>
+                  <p className="text-[11px] text-[var(--text-weaker)]">
+                    Prefill writes <code>{"{\"id\": \"...\"}"}</code>. Edit JSON if your OpenCode version expects another shape.
+                  </p>
+                </div>
+
+                <Textarea
+                  value={projectUpdateBody}
+                  onChange={(event) => setProjectUpdateBody(event.target.value)}
+                  className="oc-mono h-28 resize-none text-[11px]"
+                  placeholder='JSON body for POST /project/current (example: {"id":"..."})'
+                />
+
+                <Button size="sm" variant="default" disabled={runtimeControlsLocked} onClick={() => void handleUpdateCurrentProject()}>
+                  update current
+                </Button>
+
+                {systemSnapshotError && (
+                  <div className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-2.5 text-[12px] text-[var(--critical)]">
+                    {systemSnapshotError}
+                  </div>
+                )}
+
+                <details className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                  <summary className="cursor-pointer text-[12px] font-medium text-[var(--text-strong)]">project list snapshot</summary>
+                  <pre className="oc-scroll oc-mono mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                    {prettyJson(projectListSection?.data ?? null)}
+                  </pre>
+                </details>
+
+                <details className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                  <summary className="cursor-pointer text-[12px] font-medium text-[var(--text-strong)]">
+                    current project snapshot
+                  </summary>
+                  <pre className="oc-scroll oc-mono mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                    {prettyJson(projectCurrentSection?.data ?? null)}
+                  </pre>
+                </details>
               </CardContent>
             </Card>
 

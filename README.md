@@ -22,6 +22,7 @@ Local-first OpenCode control plane for monitoring and executing OpenCode operati
   - agent picker with local/TUI cycle actions and shell-agent quick apply,
   - MCP panel with status list, connect/disconnect/auth actions, and resource preview,
   - file explorer module for find/list/content/status workflows via `/api/opencode/files`,
+  - project module for list/current snapshots and `POST /project/current` update actions,
   - session operation runner (fork/revert/share/summarize/delete/etc),
   - permission and question response queues,
   - TUI command shortcuts (`/tui/*` routes),
