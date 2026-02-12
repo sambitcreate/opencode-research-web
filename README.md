@@ -73,12 +73,76 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
 4. Session detail reads use `GET /api/opencode/sessions?sessionId=<id>`.
 5. Compatibility query route remains available at `POST /api/query` (still auto-starts OpenCode when needed).
 
-## UI and Themes
+## UI and Design System
 
-- The app shell uses a solid, high-contrast design system (`surface`, `text`, `border`, `interactive`).
-- **Design Philosophy**: No gradients, no glassmorphism, high legibility.
-- Runtime theme switcher (`OC-1`, `Tokyo Night`, `Nord`, `Catppuccin`) and `system/light/dark` scheme control live in `/settings`.
-- UI primitives remain in `src/components/ui/*`.
+**Design Philosophy: Technical Precision**
+
+The app uses a refined brutalist aesthetic designed for developers - maximum clarity, zero clutter, instant feedback.
+
+### Core Principles
+
+- **True black backgrounds** (`#000000`) for maximum contrast and OLED-friendly display
+- **Sharp 2px corners** throughout - no rounded edges, technical precision
+- **Electric blue accent** (`#0066FF`) - single focal color for important actions and states
+- **Snap transitions** - instant state changes, no easing (transition-none)
+- **Tighter spacing** - efficient use of screen real estate
+- **IBM Plex typography** - cohesive technical family (IBM Plex Sans + IBM Plex Mono)
+
+### Color System
+
+```css
+/* Backgrounds */
+--background: #000000          /* True black */
+--surface-raised: #111111      /* Elevated surfaces */
+--surface-hover: #1a1a1a       /* Interactive hover */
+
+/* Borders */
+--border-base: #222222         /* Standard 1px dividers */
+--border-selected: #0066FF     /* Focus/selection state */
+
+/* Text */
+--text-strong: #ffffff         /* Headings, emphasis */
+--text-base: #f5f5f5          /* Body text */
+--text-weak: #888888          /* Secondary text */
+
+/* Status */
+--success: #00FF41            /* Terminal green */
+--warning: #FFD700            /* Gold */
+--critical: #FF0055           /* Hot pink red */
+--accent: #0066FF             /* Electric blue */
+```
+
+### Design Tokens
+
+All UI components use CSS variables for consistency:
+- Defined in `src/app/globals.css`
+- Token-driven approach allows runtime theme flexibility
+- Semantic naming (`--surface-*`, `--text-*`, `--border-*`)
+
+### UI Components
+
+Minimalist shadcn-style primitives in `src/components/ui/*`:
+- **Button**: Sharp corners, clear hierarchy (default/secondary/outline/ghost/accent)
+- **Card**: Tighter padding (4px), minimal shadows
+- **Badge**: Monospace labels, uppercase, compact
+- **Input/Textarea**: 2px radius, electric blue focus rings
+- **Separator**: Clean 1px dividers
+
+### Utility Classes
+
+Technical precision helpers in `globals.css`:
+- `.oc-mono` - monospace text
+- `.oc-kicker` - uppercase labels
+- `.oc-status-dot` - square status indicators
+- `.oc-code` - inline code blocks
+- `.oc-interactive` - hover lift effects
+
+### Advanced Controls
+
+Runtime customization lives in `/settings`:
+- Theme switching between preset palettes
+- Light/dark/system scheme control
+- Provider/model/agent configuration
 
 ## Environment Variables
 
