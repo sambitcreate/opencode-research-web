@@ -106,7 +106,7 @@ Last updated: February 11, 2026
 ## P2 (Should) - File/Project/Worktree/Config + Diagnostics
 
 ### API
-- [ ] Add `GET /api/opencode/files` with modes:
+- [x] Add `GET /api/opencode/files` with modes:
   - `findText` -> `/find`
   - `findFile` -> `/find/file`
   - `list` -> `/file`
@@ -213,3 +213,6 @@ Last updated: February 11, 2026
   - Added provider-grouped model picker + model variant selector with session init apply action
   - Added agent picker with local cycle, TUI cycle, and quick apply to shell composer mode
   - Added MCP control panel with status, connect/disconnect/auth actions, and resource previews
+- [x] 2026-02-11: Added `/api/opencode/files` mode-based passthrough route:
+  - Supports `findText`, `findFile`, `list`, `content`, and `status` modes
+  - Forwards additional query params to mapped OpenCode endpoints

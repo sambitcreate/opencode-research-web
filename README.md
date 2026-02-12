@@ -159,6 +159,20 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
     - success: `{ ok, target, action, request, result }`
     - validation/resolution errors: `{ ok: false, error: { code, message, details } }`
 
+- `GET /api/opencode/files`
+  - Mode-based file/find passthrough route.
+  - Query params:
+    - `mode` required:
+      - `findText` -> `/find`
+      - `findFile` -> `/find/file`
+      - `list` -> `/file`
+      - `content` -> `/file/content`
+      - `status` -> `/file/status`
+    - `autostart=1` optional
+    - any other query params are forwarded directly to the mapped OpenCode endpoint
+  - Output:
+    - `{ mode, request, result }`
+
 - `GET /api/opencode/openapi`
   - Returns parsed OpenCode OpenAPI endpoint snapshot for explorer UX.
   - Attempts live OpenCode spec first; falls back to an embedded endpoint manifest.
@@ -229,6 +243,7 @@ Optional live smoke test:
 - `src/app/page.tsx` monitor-first control UI
 - `src/app/api/opencode/monitor/route.ts` aggregated monitor snapshot route
 - `src/app/api/opencode/control/route.ts` generic OpenCode control executor
+- `src/app/api/opencode/files/route.ts` mode-based file/find passthrough route
 - `src/app/api/opencode/openapi/route.ts` OpenAPI snapshot route
 - `src/app/api/opencode/sessions/route.ts` session list/detail route
 - `src/app/api/opencode/status/route.ts` engine status route
