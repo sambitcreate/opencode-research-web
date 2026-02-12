@@ -151,7 +151,7 @@ Last updated: February 11, 2026
 - [x] Add event method-router layer before reducer mutation.
 - [ ] Keep optional/additive response fields only (no breaking contract changes).
 - [x] Add compatibility checks when OpenCode API evolves.
-- [ ] Keep monitor payload size bounded (include flags + lazy loads).
+- [x] Keep monitor payload size bounded (include flags + lazy loads).
 
 ## Validation Checklist (Run Per Meaningful Change)
 
@@ -195,6 +195,10 @@ Last updated: February 11, 2026
 - [x] 2026-02-12: Added PTY websocket feasibility spike route:
   - `GET /api/opencode/pty/:ptyId/connect` probes upstream connect endpoint and reports feasibility diagnostics
   - Documents that transparent websocket upgrade proxying is not provided by the current Next route-handler path
+- [x] 2026-02-12: Added bounded monitor queue limits for payload control:
+  - Added additive monitor query params `permissionLimit` and `questionLimit` (default 80 each)
+  - Wired limits through API route, backend snapshot builder, and typed client adapter
+  - Updated README monitor query parameter documentation
 - [x] 2026-02-11: Converted this document from narrative plan to checklist-style tracker.
 - [x] 2026-02-11: Completed initial P0 API backend slice:
   - `/api/opencode/events` SSE bridge (`scope`, `autostart`, source-tagged normalized events with `seq`)

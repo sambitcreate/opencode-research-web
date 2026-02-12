@@ -41,11 +41,15 @@ export async function GET(request: NextRequest) {
     const searchParams = new URL(request.url).searchParams;
     const autostart = searchParams.get('autostart') === '1';
     const sessionLimit = parsePositiveInteger(searchParams.get('sessionLimit'), 80);
+    const permissionLimit = parsePositiveInteger(searchParams.get('permissionLimit'), 80);
+    const questionLimit = parsePositiveInteger(searchParams.get('questionLimit'), 80);
     const include = parseIncludes(searchParams.get('include'));
 
     const snapshot = await getOpenCodeMonitorSnapshot({
       ensureRunning: autostart,
       sessionLimit,
+      permissionLimit,
+      questionLimit,
       include
     });
 

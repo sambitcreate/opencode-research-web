@@ -134,6 +134,8 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
   - Query params:
     - `autostart=1` optional
     - `sessionLimit` optional (default 80)
+    - `permissionLimit` optional (default 80)
+    - `questionLimit` optional (default 80)
     - `include` optional CSV:
       - `providers,agents,skills,commands,path,vcs,mcp,lsp,formatter,projects,config,compatibility,openapi`
   - Returns:

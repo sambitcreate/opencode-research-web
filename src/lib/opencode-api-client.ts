@@ -40,6 +40,8 @@ type SessionTranscriptOptions = {
 
 type MonitorSnapshotOptions = {
   sessionLimit?: number;
+  permissionLimit?: number;
+  questionLimit?: number;
   include?: string[];
   autostart?: boolean;
 };
@@ -162,6 +164,8 @@ export async function fetchOpenCodeMonitorSnapshot<T>(input?: MonitorSnapshotOpt
   return requestJson<T>('/api/opencode/monitor', {
     query: {
       sessionLimit: input?.sessionLimit,
+      permissionLimit: input?.permissionLimit,
+      questionLimit: input?.questionLimit,
       include: input?.include?.join(','),
       autostart: input?.autostart
     },

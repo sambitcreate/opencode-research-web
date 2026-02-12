@@ -1896,10 +1896,14 @@ export async function getOpenCodeQuestions(options?: {
 export async function getOpenCodeMonitorSnapshot(options?: {
   ensureRunning?: boolean;
   sessionLimit?: number;
+  permissionLimit?: number;
+  questionLimit?: number;
   include?: OpenCodeMonitorInclude[];
 }): Promise<OpenCodeMonitorSnapshot> {
   const ensureRunning = options?.ensureRunning === true;
   const sessionLimit = clampInteger(options?.sessionLimit, 80, 1, 200);
+  const permissionLimit = clampInteger(options?.permissionLimit, 80, 1, 250);
+  const questionLimit = clampInteger(options?.questionLimit, 80, 1, 250);
   const includeSet = new Set(options?.include ?? []);
   const includeRequested = (key: OpenCodeMonitorInclude, defaultsToIncluded: boolean): boolean => {
     if (includeSet.size === 0) return defaultsToIncluded;
@@ -1993,8 +1997,8 @@ export async function getOpenCodeMonitorSnapshot(options?: {
     status,
     sessions,
     sessionStatus,
-    permissions,
-    questions,
+    permissions: permissions.slice(0, permissionLimit),
+    questions: questions.slice(0, questionLimit),
     providers: providers && providers.ok ? providers.data : null,
     commands: commands && commands.ok ? commands.data : null,
     agents: agents && agents.ok ? agents.data : null,

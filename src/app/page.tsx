@@ -1973,6 +1973,8 @@ export default function OpenCodeMonitorPage() {
     try {
       const snapshot = await fetchOpenCodeMonitorSnapshot<OpenCodeMonitorSnapshot>({
         sessionLimit: 120,
+        permissionLimit: 80,
+        questionLimit: 80,
         autostart: false,
         include: [
           'providers',
