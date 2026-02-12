@@ -179,6 +179,12 @@ Last updated: February 11, 2026
 
 ## Done Log
 
+- [x] 2026-02-12: Refactored oversized monitor/runtime modules without changing API/UI contracts:
+  - Extracted monitor page shared model code into `src/lib/opencode-monitor/{types,constants,utils}.ts`
+  - Slimmed `src/app/page.tsx` by importing shared monitor symbols/types from `src/lib/opencode-monitor-page-shared.ts`
+  - Split OpenAPI compatibility logic into `src/lib/opencode-openapi-compat.ts`
+  - Split OpenCode data/session parsing utilities into `src/lib/opencode-data-utils.ts`
+  - Verified with `npm run lint` and `npm run build -- --webpack`
 - [x] 2026-02-12: Added command palette parity for keyboard-driven operations:
   - Global shortcut `Ctrl/Cmd + K` opens a searchable command palette modal
   - Keyboard navigation (`ArrowUp`, `ArrowDown`, `Enter`, `Escape`) and click execution
