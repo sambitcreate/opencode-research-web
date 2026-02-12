@@ -75,7 +75,8 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
 
 ## UI and Themes
 
-- The app shell keeps the OpenCode-inspired semantic token system (`surface`, `text`, `border`, `interactive`).
+- The app shell uses a solid, high-contrast design system (`surface`, `text`, `border`, `interactive`).
+- **Design Philosophy**: No gradients, no glassmorphism, high legibility.
 - Runtime theme switcher (`OC-1`, `Tokyo Night`, `Nord`, `Catppuccin`) and `system/light/dark` scheme control live in `/settings`.
 - UI primitives remain in `src/components/ui/*`.
 

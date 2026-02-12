@@ -31,7 +31,7 @@ Primary goal: keep the local query flow stable and transparent.
 - Do not remove automatic OpenCode startup on research requests.
 - Do not switch `query` API runtime away from Node (`runtime = 'nodejs'`), because it spawns processes.
 - Avoid destructive git commands unless explicitly requested.
-- Keep the OpenCode-inspired theme system and compact UI density intact unless explicitly asked to redesign.
+- Maintain the solid, high-contrast, no-gradient design system. Do not introduce glassmorphism or low-contrast elements.
 
 ## UI Surface Boundaries
 
