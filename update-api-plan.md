@@ -90,14 +90,14 @@ Last updated: February 11, 2026
 - [x] Add mention autocomplete for `@file`, `@agent`, MCP resources.
 - [x] Add shell mode + command mode indicators.
 - [x] Add image/file attachments in composer.
-- [ ] Add provider connect modal:
+- [x] Add provider connect modal:
   - auth method discovery
   - OAuth authorize/callback
   - API key entry
-- [ ] Add model picker grouped by provider.
-- [ ] Add model variant selector.
-- [ ] Add agent picker and quick-cycle actions.
-- [ ] Add MCP panel:
+- [x] Add model picker grouped by provider.
+- [x] Add model variant selector.
+- [x] Add agent picker and quick-cycle actions.
+- [x] Add MCP panel:
   - status list
   - connect/disconnect
   - auth actions
@@ -208,3 +208,8 @@ Last updated: February 11, 2026
 - [x] 2026-02-11: Stabilized verification baseline:
   - Excluded `/reference` mirror repositories from app lint/type-check scope (`eslint` + `tsconfig`)
   - Restored green checks for `npm run lint` and `npm run build -- --webpack`
+- [x] 2026-02-11: Completed second P1 runtime control UI slice:
+  - Added provider connect modal with auth method discovery, OAuth authorize/callback, and API key submission
+  - Added provider-grouped model picker + model variant selector with session init apply action
+  - Added agent picker with local cycle, TUI cycle, and quick apply to shell composer mode
+  - Added MCP control panel with status, connect/disconnect/auth actions, and resource previews

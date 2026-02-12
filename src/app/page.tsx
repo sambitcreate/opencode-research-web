@@ -7,18 +7,23 @@ import {
   AtSign,
   CheckCircle2,
   Command,
+  Cpu,
   Database,
   FileCode2,
   FileImage,
   FilePlus2,
+  KeyRound,
   LoaderCircle,
+  Link,
   MonitorCog,
   Moon,
   Palette,
   RefreshCw,
+  RotateCw,
   Search,
   SendHorizontal,
   Server,
+  PlugZap,
   Sun,
   TerminalSquare,
   X
@@ -206,6 +211,26 @@ type ComposerSuggestion = {
 type ComposerAttachment = {
   id: string;
   file: File;
+};
+
+type ModelOption = {
+  id: string;
+  label: string;
+  variants: string[];
+};
+
+type ProviderOption = {
+  id: string;
+  label: string;
+  models: ModelOption[];
+};
+
+type McpServerOption = {
+  name: string;
+  label: string;
+  status: string | null;
+  connected: boolean | null;
+  resources: string[];
 };
 
 type ThemePalette = {
@@ -999,6 +1024,293 @@ function extractIdentifier(value: unknown): string | null {
   return extractString(nested, ['requestID', 'id', 'sessionID']);
 }
 
+function collectRecords(
+  value: unknown,
+  depth = 0,
+  bucket: Array<Record<string, unknown>> = []
+): Array<Record<string, unknown>> {
+  if (!value || depth > 4) return bucket;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectRecords(item, depth + 1, bucket);
+      if (bucket.length >= 400) break;
+    }
+    return bucket;
+  }
+
+  const record = asRecord(value);
+  if (!record) return bucket;
+
+  bucket.push(record);
+  for (const nested of Object.values(record)) {
+    if (!nested || typeof nested !== 'object') continue;
+    collectRecords(nested, depth + 1, bucket);
+    if (bucket.length >= 400) break;
+  }
+
+  return bucket;
+}
+
+function toStringList(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) {
+    const strings: string[] = [];
+    for (const item of value) {
+      if (typeof item === 'string') {
+        strings.push(item);
+        continue;
+      }
+      const record = asRecord(item);
+      if (!record) continue;
+      const candidate = extractString(record, ['id', 'name', 'slug', 'title', 'value']);
+      if (candidate) strings.push(candidate);
+    }
+    return strings;
+  }
+  return [];
+}
+
+function mergeModelOptions(models: ModelOption[]): ModelOption[] {
+  const map = new Map<string, ModelOption>();
+
+  for (const model of models) {
+    const modelId = model.id.trim();
+    if (!modelId) continue;
+    const existing = map.get(modelId);
+    if (!existing) {
+      map.set(modelId, {
+        id: modelId,
+        label: model.label || modelId,
+        variants: toUniqueStrings(model.variants, 64)
+      });
+      continue;
+    }
+
+    existing.variants = toUniqueStrings([...existing.variants, ...model.variants], 64);
+    if (!existing.label && model.label) {
+      existing.label = model.label;
+    }
+  }
+
+  return Array.from(map.values()).sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function extractModelOptionsFromUnknown(value: unknown): ModelOption[] {
+  const models: ModelOption[] = [];
+
+  for (const entry of toStringList(value)) {
+    const id = entry.trim();
+    if (!id) continue;
+    models.push({ id, label: id, variants: [] });
+  }
+
+  const records = collectRecords(value);
+  for (const record of records) {
+    const modelId = extractString(record, ['modelID', 'modelId']);
+    const modelLabel = extractString(record, ['name', 'title', 'label']) ?? modelId;
+    if (!modelId) continue;
+    const variants = toUniqueStrings(
+      [
+        ...toStringList(record.variants),
+        ...toStringList(record.variantIDs),
+        ...toStringList(record.variantIds),
+        ...toStringList(record.modelVariants)
+      ],
+      64
+    );
+
+    models.push({
+      id: modelId,
+      label: modelLabel || modelId,
+      variants
+    });
+  }
+
+  return mergeModelOptions(models);
+}
+
+function extractProviderOptions(value: unknown): ProviderOption[] {
+  const providerMap = new Map<string, ProviderOption>();
+
+  const addProvider = (providerIdRaw: string, providerLabelRaw?: string | null, modelsRaw?: unknown): void => {
+    const providerId = providerIdRaw.trim();
+    if (!providerId) return;
+
+    const providerLabel = providerLabelRaw?.trim() || providerId;
+    const models = extractModelOptionsFromUnknown(modelsRaw);
+    const existing = providerMap.get(providerId);
+
+    if (!existing) {
+      providerMap.set(providerId, {
+        id: providerId,
+        label: providerLabel,
+        models
+      });
+      return;
+    }
+
+    existing.models = mergeModelOptions([...existing.models, ...models]);
+    if (!existing.label && providerLabel) {
+      existing.label = providerLabel;
+    }
+  };
+
+  const rootRecord = asRecord(value);
+  if (rootRecord) {
+    const providerCollection = rootRecord.providers ?? rootRecord.list ?? rootRecord.items ?? rootRecord.data;
+    if (providerCollection !== undefined) {
+      const providerItems = Array.isArray(providerCollection) ? providerCollection : [providerCollection];
+      for (const providerEntry of providerItems) {
+        const providerRecord = asRecord(providerEntry);
+        if (!providerRecord) continue;
+        const providerId = extractString(providerRecord, ['id', 'providerID', 'providerId', 'slug', 'name']);
+        if (!providerId) continue;
+        addProvider(providerId, extractString(providerRecord, ['name', 'title', 'label']), providerRecord.models);
+      }
+    }
+
+    for (const [key, nestedValue] of Object.entries(rootRecord)) {
+      if (key === 'providers' || key === 'list' || key === 'items' || key === 'data') continue;
+      const nestedRecord = asRecord(nestedValue);
+      if (!nestedRecord) continue;
+      if (!nestedRecord.models && !nestedRecord.modelIDs && !nestedRecord.modelId && !nestedRecord.modelID) continue;
+      const providerId = extractString(nestedRecord, ['id', 'providerID', 'providerId', 'slug']) ?? key;
+      addProvider(providerId, extractString(nestedRecord, ['name', 'title', 'label']) ?? key, nestedRecord.models ?? nestedRecord.modelIDs);
+    }
+  }
+
+  const records = collectRecords(value);
+  for (const record of records) {
+    const providerId = extractString(record, ['providerID', 'providerId']);
+    if (!providerId) continue;
+    addProvider(
+      providerId,
+      extractString(record, ['providerName', 'name', 'title', 'label']),
+      record.models ?? record.modelIDs ?? record.modelId
+    );
+  }
+
+  if (providerMap.size === 0) {
+    const fallbackIds = toUniqueStrings(
+      collectStringFields(value, ['providerID', 'providerId', 'provider', 'id', 'name', 'slug']).filter((entry) => entry.length <= 80),
+      40
+    );
+    for (const providerId of fallbackIds) {
+      addProvider(providerId, providerId, undefined);
+    }
+  }
+
+  return Array.from(providerMap.values()).sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function extractMcpServers(value: unknown): McpServerOption[] {
+  const map = new Map<string, McpServerOption>();
+
+  const addServer = (nameRaw: string, input: { label?: string | null; status?: string | null; connected?: boolean | null; resources?: unknown }): void => {
+    const name = nameRaw.trim();
+    if (!name) return;
+
+    const label = input.label?.trim() || name;
+    const resources = toUniqueStrings(toStringList(input.resources), 80);
+    const existing = map.get(name);
+    if (!existing) {
+      map.set(name, {
+        name,
+        label,
+        status: input.status ?? null,
+        connected: typeof input.connected === 'boolean' ? input.connected : null,
+        resources
+      });
+      return;
+    }
+
+    existing.resources = toUniqueStrings([...existing.resources, ...resources], 80);
+    if (!existing.status && input.status) existing.status = input.status;
+    if (existing.connected === null && typeof input.connected === 'boolean') {
+      existing.connected = input.connected;
+    }
+    if (!existing.label && label) existing.label = label;
+  };
+
+  const rootRecord = asRecord(value);
+  if (rootRecord) {
+    const serverCollection = rootRecord.servers ?? rootRecord.list ?? rootRecord.items ?? rootRecord.data;
+    if (serverCollection !== undefined) {
+      const serverItems = Array.isArray(serverCollection) ? serverCollection : [serverCollection];
+      for (const serverEntry of serverItems) {
+        const serverRecord = asRecord(serverEntry);
+        if (!serverRecord) continue;
+        const serverName = extractString(serverRecord, ['name', 'id', 'server']);
+        if (!serverName) continue;
+        const status = extractString(serverRecord, ['status', 'state']);
+        const connected =
+          typeof serverRecord.connected === 'boolean'
+            ? serverRecord.connected
+            : typeof serverRecord.active === 'boolean'
+              ? serverRecord.active
+              : typeof serverRecord.enabled === 'boolean'
+                ? serverRecord.enabled
+                : null;
+        addServer(serverName, {
+          label: extractString(serverRecord, ['title', 'label', 'name']),
+          status,
+          connected,
+          resources: serverRecord.resources
+        });
+      }
+    }
+
+    for (const [key, nestedValue] of Object.entries(rootRecord)) {
+      if (key === 'servers' || key === 'list' || key === 'items' || key === 'data') continue;
+      const nestedRecord = asRecord(nestedValue);
+      if (!nestedRecord) continue;
+      if (!nestedRecord.resources && !nestedRecord.status && !nestedRecord.state) continue;
+      const serverName = extractString(nestedRecord, ['name', 'id', 'server']) ?? key;
+      const status = extractString(nestedRecord, ['status', 'state']);
+      const connected =
+        typeof nestedRecord.connected === 'boolean'
+          ? nestedRecord.connected
+          : typeof nestedRecord.active === 'boolean'
+            ? nestedRecord.active
+            : typeof nestedRecord.enabled === 'boolean'
+              ? nestedRecord.enabled
+              : null;
+      addServer(serverName, {
+        label: extractString(nestedRecord, ['title', 'label']) ?? key,
+        status,
+        connected,
+        resources: nestedRecord.resources
+      });
+    }
+  }
+
+  const records = collectRecords(value);
+  for (const record of records) {
+    const hasMcpShape = 'resources' in record || 'status' in record || 'state' in record || 'connected' in record;
+    if (!hasMcpShape) continue;
+    const serverName = extractString(record, ['name', 'id', 'server']);
+    if (!serverName) continue;
+    const status = extractString(record, ['status', 'state']);
+    const connected =
+      typeof record.connected === 'boolean'
+        ? record.connected
+        : typeof record.active === 'boolean'
+          ? record.active
+          : typeof record.enabled === 'boolean'
+            ? record.enabled
+            : null;
+
+    addServer(serverName, {
+      label: extractString(record, ['title', 'label', 'name']),
+      status,
+      connected,
+      resources: record.resources
+    });
+  }
+
+  return Array.from(map.values()).sort((left, right) => left.label.localeCompare(right.label));
+}
+
 function parseEventJson(value: string): unknown {
   try {
     return JSON.parse(value) as unknown;
@@ -1221,6 +1533,20 @@ export default function OpenCodeMonitorPage() {
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
   const [composerCaretPosition, setComposerCaretPosition] = useState(0);
   const [composerSuggestionIndex, setComposerSuggestionIndex] = useState(0);
+  const [selectedProviderId, setSelectedProviderId] = useState('');
+  const [selectedModelId, setSelectedModelId] = useState('');
+  const [selectedModelVariant, setSelectedModelVariant] = useState('');
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [selectedMcpName, setSelectedMcpName] = useState('');
+  const [providerApiKey, setProviderApiKey] = useState('');
+  const [providerOAuthCode, setProviderOAuthCode] = useState('');
+  const [providerOAuthState, setProviderOAuthState] = useState('');
+  const [providerAuthMethods, setProviderAuthMethods] = useState<string[]>([]);
+  const [mcpAuthPayload, setMcpAuthPayload] = useState('{}');
+  const [isProviderModalOpen, setIsProviderModalOpen] = useState(false);
+  const [isRuntimeControlBusy, setIsRuntimeControlBusy] = useState(false);
+  const [runtimeControlError, setRuntimeControlError] = useState<string | null>(null);
+  const [runtimeControlResult, setRuntimeControlResult] = useState<OpenCodeControlResponse | null>(null);
 
   const [sessionOperationId, setSessionOperationId] = useState<string>(SESSION_OPERATION_DEFINITIONS[0]?.id ?? '');
   const [sessionOperationBody, setSessionOperationBody] = useState<string>(SESSION_OPERATION_DEFINITIONS[0]?.template ?? '{}');
@@ -1637,11 +1963,86 @@ export default function OpenCodeMonitorPage() {
     );
   }, [monitor?.mcp]);
 
+  const providerOptions = useMemo(() => {
+    return extractProviderOptions(monitor?.providers);
+  }, [monitor?.providers]);
+
+  const mcpServers = useMemo(() => {
+    return extractMcpServers(monitor?.mcp);
+  }, [monitor?.mcp]);
+
   const fileMentionCandidates = useMemo(() => {
     const sessionMessages = sessionDetail?.messages ?? [];
     const fromMessages = collectLikelyFilePaths(sessionMessages);
     return toUniqueStrings(fromMessages, 80);
   }, [sessionDetail?.messages]);
+
+  const selectedProviderOption = useMemo(() => {
+    return providerOptions.find((provider) => provider.id === selectedProviderId) ?? null;
+  }, [providerOptions, selectedProviderId]);
+
+  const selectedModelOption = useMemo(() => {
+    if (selectedProviderOption) {
+      return selectedProviderOption.models.find((model) => model.id === selectedModelId) ?? null;
+    }
+    for (const provider of providerOptions) {
+      const model = provider.models.find((candidate) => candidate.id === selectedModelId);
+      if (model) return model;
+    }
+    return null;
+  }, [providerOptions, selectedModelId, selectedProviderOption]);
+
+  const selectedModelVariants = useMemo(() => selectedModelOption?.variants ?? [], [selectedModelOption]);
+
+  const selectedMcpServer = useMemo(() => {
+    return mcpServers.find((server) => server.name === selectedMcpName) ?? null;
+  }, [mcpServers, selectedMcpName]);
+
+  useEffect(() => {
+    if (providerOptions.length === 0) {
+      if (selectedProviderId) setSelectedProviderId('');
+      return;
+    }
+    if (providerOptions.some((provider) => provider.id === selectedProviderId)) return;
+    setSelectedProviderId(providerOptions[0].id);
+  }, [providerOptions, selectedProviderId]);
+
+  useEffect(() => {
+    if (!selectedProviderOption) return;
+    if (selectedProviderOption.models.length === 0) {
+      if (selectedModelId) setSelectedModelId('');
+      return;
+    }
+    if (selectedProviderOption.models.some((model) => model.id === selectedModelId)) return;
+    setSelectedModelId(selectedProviderOption.models[0].id);
+  }, [selectedModelId, selectedProviderOption]);
+
+  useEffect(() => {
+    if (selectedModelVariants.length === 0) {
+      if (selectedModelVariant) setSelectedModelVariant('');
+      return;
+    }
+    if (selectedModelVariants.includes(selectedModelVariant)) return;
+    setSelectedModelVariant(selectedModelVariants[0]);
+  }, [selectedModelVariant, selectedModelVariants]);
+
+  useEffect(() => {
+    if (agentCandidates.length === 0) {
+      if (selectedAgentId) setSelectedAgentId('');
+      return;
+    }
+    if (agentCandidates.includes(selectedAgentId)) return;
+    setSelectedAgentId(agentCandidates[0]);
+  }, [agentCandidates, selectedAgentId]);
+
+  useEffect(() => {
+    if (mcpServers.length === 0) {
+      if (selectedMcpName) setSelectedMcpName('');
+      return;
+    }
+    if (mcpServers.some((server) => server.name === selectedMcpName)) return;
+    setSelectedMcpName(mcpServers[0].name);
+  }, [mcpServers, selectedMcpName]);
 
   const activeComposerToken = useMemo(() => {
     return extractComposerToken(quickPrompt, composerCaretPosition);
@@ -1782,6 +2183,8 @@ export default function OpenCodeMonitorPage() {
 
     return quickPrompt.trim().length > 0 || composerAttachments.length > 0;
   }, [activeSessionId, composerAttachments.length, composerCommand, composerMode, isOperationRunning, quickPrompt]);
+
+  const runtimeControlsLocked = isRuntimeControlBusy || isOperationRunning;
 
   useEffect(() => {
     if (composerMode !== 'shell') return;
@@ -2151,6 +2554,223 @@ export default function OpenCodeMonitorPage() {
     },
     [applyComposerSuggestion, composerSuggestions, handleSendPrompt, selectedComposerSuggestion]
   );
+
+  const runRuntimeControl = useCallback(
+    async (
+      request: {
+        path: string;
+        method?: OpenCodeHttpMethod;
+        body?: unknown;
+      },
+      options?: { refreshSession?: boolean }
+    ): Promise<OpenCodeControlResponse | null> => {
+      if (isOperationRunning) {
+        setRuntimeControlError('Another session operation is currently running. Try again in a moment.');
+        return null;
+      }
+
+      setIsRuntimeControlBusy(true);
+      setRuntimeControlError(null);
+      setEngineState('booting');
+
+      try {
+        const response = await callControl({
+          path: request.path,
+          method: request.method,
+          body: request.body
+        });
+        setRuntimeControlResult(response);
+        if (!response.ok) {
+          throw new Error(response.text || `Request failed (${request.path}).`);
+        }
+
+        await refreshMonitor({ silent: true });
+        if (options?.refreshSession && activeSessionId) {
+          await Promise.all([
+            refreshSessionDetail(activeSessionId, { silent: true }),
+            refreshSessionTimeline(activeSessionId, { silent: true })
+          ]);
+        }
+        setEngineState('ready');
+        return response;
+      } catch (error) {
+        setRuntimeControlError(error instanceof Error ? error.message : 'Runtime request failed.');
+        setEngineState('error');
+        return null;
+      } finally {
+        setIsRuntimeControlBusy(false);
+      }
+    },
+    [activeSessionId, callControl, isOperationRunning, refreshMonitor, refreshSessionDetail, refreshSessionTimeline]
+  );
+
+  const handleFetchProviderAuthMethods = useCallback(async () => {
+    const response = await runRuntimeControl({ path: '/provider/auth', method: 'GET' });
+    if (!response?.ok) return;
+
+    const methods = toUniqueStrings(
+      collectStringFields(response.data, ['id', 'name', 'type', 'method', 'label', 'providerID', 'providerId']),
+      40
+    );
+    setProviderAuthMethods(methods);
+  }, [runRuntimeControl]);
+
+  const handleProviderOAuthAuthorize = useCallback(async () => {
+    if (!selectedProviderId) {
+      setRuntimeControlError('Select a provider first.');
+      return;
+    }
+
+    await runRuntimeControl({
+      path: `/provider/${encodeURIComponent(selectedProviderId)}/oauth/authorize`,
+      method: 'POST',
+      body: {}
+    });
+  }, [runRuntimeControl, selectedProviderId]);
+
+  const handleProviderOAuthCallback = useCallback(async () => {
+    if (!selectedProviderId) {
+      setRuntimeControlError('Select a provider first.');
+      return;
+    }
+    if (!providerOAuthCode.trim()) {
+      setRuntimeControlError('Enter an OAuth callback code before sending callback.');
+      return;
+    }
+
+    const body: Record<string, unknown> = {
+      code: providerOAuthCode.trim()
+    };
+    if (providerOAuthState.trim()) body.state = providerOAuthState.trim();
+
+    await runRuntimeControl({
+      path: `/provider/${encodeURIComponent(selectedProviderId)}/oauth/callback`,
+      method: 'POST',
+      body
+    });
+  }, [providerOAuthCode, providerOAuthState, runRuntimeControl, selectedProviderId]);
+
+  const handleProviderApiKeySave = useCallback(async () => {
+    if (!selectedProviderId) {
+      setRuntimeControlError('Select a provider first.');
+      return;
+    }
+    if (!providerApiKey.trim()) {
+      setRuntimeControlError('Enter an API key before saving.');
+      return;
+    }
+
+    await runRuntimeControl({
+      path: `/auth/${encodeURIComponent(selectedProviderId)}`,
+      method: 'POST',
+      body: {
+        apiKey: providerApiKey.trim(),
+        key: providerApiKey.trim()
+      }
+    });
+  }, [providerApiKey, runRuntimeControl, selectedProviderId]);
+
+  const handleApplySessionModel = useCallback(async () => {
+    if (!activeSessionId) {
+      setRuntimeControlError('Select a session before applying provider/model.');
+      return;
+    }
+    if (!selectedProviderId || !selectedModelId) {
+      setRuntimeControlError('Select provider and model first.');
+      return;
+    }
+
+    const body: Record<string, unknown> = {
+      providerID: selectedProviderId,
+      modelID: selectedModelId
+    };
+    if (selectedModelVariant.trim()) {
+      body.variantID = selectedModelVariant.trim();
+      body.modelVariantID = selectedModelVariant.trim();
+    }
+
+    await runRuntimeControl(
+      {
+        path: `/session/${encodeURIComponent(activeSessionId)}/init`,
+        method: 'POST',
+        body
+      },
+      { refreshSession: true }
+    );
+  }, [activeSessionId, runRuntimeControl, selectedModelId, selectedModelVariant, selectedProviderId]);
+
+  const handleUseSelectedAgent = useCallback(() => {
+    const nextAgent = selectedAgentId.trim();
+    if (!nextAgent) return;
+    setComposerMode('shell');
+    setComposerShellAgent(nextAgent);
+  }, [selectedAgentId]);
+
+  const handleCycleAgentLocal = useCallback(() => {
+    if (agentCandidates.length === 0) return;
+    const currentIndex = Math.max(0, agentCandidates.indexOf(selectedAgentId));
+    const nextIndex = (currentIndex + 1) % agentCandidates.length;
+    const nextAgent = agentCandidates[nextIndex];
+    setSelectedAgentId(nextAgent);
+    setComposerMode('shell');
+    setComposerShellAgent(nextAgent);
+  }, [agentCandidates, selectedAgentId]);
+
+  const handleCycleAgentRemote = useCallback(async () => {
+    await runRuntimeControl({
+      path: '/tui/execute-command',
+      method: 'POST',
+      body: { command: 'agent_cycle' }
+    });
+  }, [runRuntimeControl]);
+
+  const handleMcpConnect = useCallback(async () => {
+    if (!selectedMcpName) {
+      setRuntimeControlError('Select an MCP server first.');
+      return;
+    }
+    await runRuntimeControl({
+      path: `/mcp/${encodeURIComponent(selectedMcpName)}/connect`,
+      method: 'POST',
+      body: {}
+    });
+  }, [runRuntimeControl, selectedMcpName]);
+
+  const handleMcpDisconnect = useCallback(async () => {
+    if (!selectedMcpName) {
+      setRuntimeControlError('Select an MCP server first.');
+      return;
+    }
+    await runRuntimeControl({
+      path: `/mcp/${encodeURIComponent(selectedMcpName)}/disconnect`,
+      method: 'POST',
+      body: {}
+    });
+  }, [runRuntimeControl, selectedMcpName]);
+
+  const handleMcpAuthenticate = useCallback(async () => {
+    if (!selectedMcpName) {
+      setRuntimeControlError('Select an MCP server first.');
+      return;
+    }
+
+    let body: unknown = {};
+    const payload = mcpAuthPayload.trim();
+    if (payload) {
+      try {
+        body = JSON.parse(payload) as unknown;
+      } catch {
+        setRuntimeControlError('MCP auth payload must be valid JSON.');
+        return;
+      }
+    }
+
+    await runRuntimeControl({
+      path: `/mcp/${encodeURIComponent(selectedMcpName)}/auth/authenticate`,
+      method: 'POST',
+      body
+    });
+  }, [mcpAuthPayload, runRuntimeControl, selectedMcpName]);
 
   const handleRunSessionOperation = async () => {
     if (!selectedOperation || !activeSessionId) return;
@@ -3039,6 +3659,205 @@ export default function OpenCodeMonitorPage() {
             <Card className="oc-panel">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
+                  <Cpu className="h-4 w-4 text-[var(--accent)]" />
+                  Runtime Controls
+                </CardTitle>
+                <CardDescription>Provider/model configuration and agent quick actions for active sessions.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                  <p className="oc-kicker">Provider + Model</p>
+                  <div className="mt-2 space-y-2">
+                    <select
+                      value={selectedProviderId}
+                      onChange={(event) => setSelectedProviderId(event.target.value)}
+                      className="h-9 w-full rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                    >
+                      {providerOptions.length === 0 && <option value="">no providers detected</option>}
+                      {providerOptions.map((provider) => (
+                        <option key={provider.id} value={provider.id}>
+                          {provider.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={selectedModelId}
+                      onChange={(event) => setSelectedModelId(event.target.value)}
+                      className="h-9 w-full rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                    >
+                      {providerOptions.length === 0 && <option value="">no models detected</option>}
+                      {providerOptions.map((provider) => (
+                        <optgroup key={provider.id} label={provider.label}>
+                          {provider.models.length === 0 && <option value="">no models</option>}
+                          {provider.models.map((model) => (
+                            <option key={`${provider.id}-${model.id}`} value={model.id}>
+                              {model.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+
+                    <select
+                      value={selectedModelVariant}
+                      onChange={(event) => setSelectedModelVariant(event.target.value)}
+                      className="h-9 w-full rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                    >
+                      {selectedModelVariants.length === 0 && <option value="">default variant</option>}
+                      {selectedModelVariants.map((variant) => (
+                        <option key={variant} value={variant}>
+                          {variant}
+                        </option>
+                      ))}
+                    </select>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        size="sm"
+                        variant="default"
+                        disabled={!activeSessionId || !selectedProviderId || !selectedModelId || runtimeControlsLocked}
+                        onClick={() => void handleApplySessionModel()}
+                      >
+                        {isRuntimeControlBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Cpu className="h-3.5 w-3.5" />}
+                        Apply To Session
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={() => setIsProviderModalOpen(true)}>
+                        <KeyRound className="h-3.5 w-3.5" />
+                        Provider Connect
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                  <p className="oc-kicker">Agent Picker</p>
+                  <div className="mt-2 space-y-2">
+                    <select
+                      value={selectedAgentId}
+                      onChange={(event) => setSelectedAgentId(event.target.value)}
+                      className="h-9 w-full rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                    >
+                      {agentCandidates.length === 0 && <option value="">no agents detected</option>}
+                      {agentCandidates.map((agent) => (
+                        <option key={agent} value={agent}>
+                          {agent}
+                        </option>
+                      ))}
+                    </select>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <Button size="sm" variant="secondary" disabled={!selectedAgentId} onClick={handleUseSelectedAgent}>
+                        use
+                      </Button>
+                      <Button size="sm" variant="secondary" disabled={agentCandidates.length < 2} onClick={handleCycleAgentLocal}>
+                        <RotateCw className="h-3.5 w-3.5" />
+                        local
+                      </Button>
+                      <Button size="sm" variant="secondary" disabled={runtimeControlsLocked} onClick={() => void handleCycleAgentRemote()}>
+                        <RotateCw className="h-3.5 w-3.5" />
+                        tui
+                      </Button>
+                    </div>
+                    <p className="text-[11px] text-[var(--text-weaker)]">Composer shell agent: {composerShellAgent || 'auto'}</p>
+                  </div>
+                </div>
+
+                {(runtimeControlError || runtimeControlResult) && (
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                    {runtimeControlError && <p className="text-[12px] text-[var(--critical)]">{runtimeControlError}</p>}
+                    {runtimeControlResult && (
+                      <pre className="oc-scroll oc-mono mt-2 max-h-36 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                        {prettyJson(runtimeControlResult.data ?? runtimeControlResult.text)}
+                      </pre>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <PlugZap className="h-4 w-4 text-[var(--accent)]" />
+                  MCP Panel
+                </CardTitle>
+                <CardDescription>Server status, connect/disconnect, auth actions, and resource previews.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <select
+                  value={selectedMcpName}
+                  onChange={(event) => setSelectedMcpName(event.target.value)}
+                  className="h-9 w-full rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                >
+                  {mcpServers.length === 0 && <option value="">no MCP servers detected</option>}
+                  {mcpServers.map((server) => (
+                    <option key={server.name} value={server.name}>
+                      {server.label}
+                    </option>
+                  ))}
+                </select>
+
+                {selectedMcpServer && (
+                  <div className="flex flex-wrap gap-1.5">
+                    <Badge>status: {selectedMcpServer.status ?? 'unknown'}</Badge>
+                    <Badge>
+                      connected:{' '}
+                      {selectedMcpServer.connected === null ? 'unknown' : selectedMcpServer.connected ? 'yes' : 'no'}
+                    </Badge>
+                    <Badge>{selectedMcpServer.resources.length} resources</Badge>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-3 gap-2">
+                  <Button size="sm" variant="secondary" disabled={!selectedMcpName || runtimeControlsLocked} onClick={() => void handleMcpConnect()}>
+                    connect
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={!selectedMcpName || runtimeControlsLocked}
+                    onClick={() => void handleMcpDisconnect()}
+                  >
+                    disconnect
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={!selectedMcpName || runtimeControlsLocked}
+                    onClick={() => void handleMcpAuthenticate()}
+                  >
+                    auth
+                  </Button>
+                </div>
+
+                <Textarea
+                  value={mcpAuthPayload}
+                  onChange={(event) => setMcpAuthPayload(event.target.value)}
+                  className="oc-mono h-24 resize-none text-[11px]"
+                  placeholder='MCP auth payload JSON (default: "{}")'
+                />
+
+                <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                  <p className="oc-kicker mb-2">Resource Preview</p>
+                  {!selectedMcpServer || selectedMcpServer.resources.length === 0 ? (
+                    <p className="text-[11px] text-[var(--text-weaker)]">No resource metadata available.</p>
+                  ) : (
+                    <div className="oc-scroll max-h-32 space-y-1 overflow-y-auto">
+                      {selectedMcpServer.resources.slice(0, 24).map((resource) => (
+                        <p key={resource} className="oc-mono break-all text-[11px] text-[var(--text-weak)]">
+                          {resource}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
                   <Activity className="h-4 w-4 text-[var(--accent)]" />
                   Session Operation Runner
                 </CardTitle>
@@ -3654,6 +4473,119 @@ export default function OpenCodeMonitorPage() {
           </section>
         </div>
       </div>
+
+      {isProviderModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close provider connect modal"
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setIsProviderModalOpen(false)}
+          />
+          <Card className="oc-panel relative z-10 w-full max-w-xl" onClick={(event) => event.stopPropagation()}>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="flex items-center gap-2">
+                  <KeyRound className="h-4 w-4 text-[var(--accent)]" />
+                  Provider Connect
+                </CardTitle>
+                <Button size="sm" variant="secondary" onClick={() => setIsProviderModalOpen(false)}>
+                  <X className="h-3.5 w-3.5" />
+                  close
+                </Button>
+              </div>
+              <CardDescription>Auth method discovery, OAuth authorize/callback, and API key handoff.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <select
+                value={selectedProviderId}
+                onChange={(event) => setSelectedProviderId(event.target.value)}
+                className="h-9 w-full rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+              >
+                {providerOptions.length === 0 && <option value="">no providers detected</option>}
+                {providerOptions.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.label}
+                  </option>
+                ))}
+              </select>
+
+              <div className="grid grid-cols-2 gap-2">
+                <Button size="sm" variant="secondary" disabled={runtimeControlsLocked} onClick={() => void handleFetchProviderAuthMethods()}>
+                  <Search className="h-3.5 w-3.5" />
+                  Discover Auth
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!selectedProviderId || runtimeControlsLocked}
+                  onClick={() => void handleProviderOAuthAuthorize()}
+                >
+                  <Link className="h-3.5 w-3.5" />
+                  OAuth Authorize
+                </Button>
+              </div>
+
+              {providerAuthMethods.length > 0 && (
+                <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-2.5">
+                  <p className="oc-kicker">Discovered methods</p>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {providerAuthMethods.slice(0, 20).map((method) => (
+                      <Badge key={method}>{method}</Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2 rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                <p className="oc-kicker">OAuth Callback</p>
+                <Input
+                  value={providerOAuthCode}
+                  onChange={(event) => setProviderOAuthCode(event.target.value)}
+                  placeholder="OAuth code"
+                />
+                <Input
+                  value={providerOAuthState}
+                  onChange={(event) => setProviderOAuthState(event.target.value)}
+                  placeholder="OAuth state (optional)"
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!selectedProviderId || !providerOAuthCode.trim() || runtimeControlsLocked}
+                  onClick={() => void handleProviderOAuthCallback()}
+                >
+                  Send Callback
+                </Button>
+              </div>
+
+              <div className="space-y-2 rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                <p className="oc-kicker">API Key</p>
+                <Input
+                  type="password"
+                  value={providerApiKey}
+                  onChange={(event) => setProviderApiKey(event.target.value)}
+                  placeholder="Paste API key/token"
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!selectedProviderId || !providerApiKey.trim() || runtimeControlsLocked}
+                  onClick={() => void handleProviderApiKeySave()}
+                >
+                  Save Key
+                </Button>
+              </div>
+
+              {runtimeControlError && (
+                <p className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-2.5 text-[12px] text-[var(--critical)]">
+                  {runtimeControlError}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
