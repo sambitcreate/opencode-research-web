@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "OpenCode Research Workbench",
+  title: "OpenCode Monitor Workbench",
   description:
-    "Local-first research interface for OpenCode with an OpenCode-inspired themed UI and session monitoring.",
+    "Local-first monitor and control interface for OpenCode with an OpenCode-inspired themed UI and session monitoring.",
 };
 
 export default function RootLayout({

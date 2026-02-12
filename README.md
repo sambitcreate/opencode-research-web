@@ -71,7 +71,7 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
 2. Backend checks OpenCode status and reads monitor surfaces (`/session`, `/session/status`, `/permission`, `/question`, `/provider`, `/agent`, `/skill`, `/command`, `/path`, `/vcs`).
 3. UI can execute any OpenCode operation through `POST /api/opencode/control`.
 4. Session detail reads use `GET /api/opencode/sessions?sessionId=<id>`.
-5. Existing research route remains available at `POST /api/query` (still auto-starts OpenCode when needed).
+5. Compatibility query route remains available at `POST /api/query` (still auto-starts OpenCode when needed).
 
 ## UI and Themes
 
@@ -94,7 +94,8 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
 ## API Routes
 
 - `POST /api/query`
-  - Existing research-oriented route (kept for compatibility).
+  - Compatibility query route (kept for existing clients).
+  - Sends the provided query text directly to OpenCode (no enforced response template wrapper).
   - Input: `{ "query": "..." }`
   - Output contract preserved:
     - `id`, `query`, `status`, `sessionId`, `answer`, `sources`, `metadata`, `timestamp`
@@ -318,7 +319,7 @@ Optional live smoke test:
 - `src/app/api/opencode/pty/[ptyId]/connect/route.ts` PTY websocket feasibility probe route
 - `src/app/api/opencode/sessions/route.ts` session list/detail route
 - `src/app/api/opencode/status/route.ts` engine status route
-- `src/app/api/query/route.ts` legacy research query route
+- `src/app/api/query/route.ts` compatibility query route
 - `scripts/smoke-opencode-api.mjs` repeatable live API smoke validation
 - `src/app/globals.css` visual theme and shell styles
 - `src/components/ui/*` shadcn-style UI primitives

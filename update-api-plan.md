@@ -199,6 +199,10 @@ Last updated: February 12, 2026
 
 ## Done Log
 
+- [x] 2026-02-12: Removed legacy forced "research assistant" prompt wrapper from compatibility query flow:
+  - `buildResearchPrompt()` now forwards raw query text only (no fixed 3-findings + sources template injection)
+  - Updated docs/metadata wording to align with monitor/control-first app positioning
+  - Verified with `npm run lint` and `npm run build -- --webpack`
 - [x] 2026-02-12: Improved offline monitor resilience and query-failure transparency:
   - `getOpenCodeMonitorSnapshot()` now uses safe optional endpoint reads, preventing monitor route failures when OpenCode is offline
   - `runResearchQuery()` now propagates failure context (`sessionId`, startup context, elapsed processing time) from partial query flows

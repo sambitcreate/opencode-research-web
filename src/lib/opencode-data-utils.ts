@@ -444,22 +444,7 @@ export function sanitizeAnswer(text: string): string {
 }
 
 export function buildResearchPrompt(query: string): string {
-  return [
-    'You are a research assistant for a localhost app.',
-    'Return only the final answer for the user.',
-    'Do not include internal reasoning or planning statements.',
-    'Do not repeat content.',
-    'Use this format exactly:',
-    '1. <first key finding>',
-    '2. <second key finding>',
-    '3. <third key finding>',
-    'Sources:',
-    '- <url 1>',
-    '- <url 2>',
-    '- <url 3>',
-    '',
-    `Research question: ${query}`
-  ].join('\n');
+  return query.trim();
 }
 
 export function findConfidenceScore(value: unknown): number | null {
