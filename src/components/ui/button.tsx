@@ -13,10 +13,10 @@ const variantClasses = {
 } as const;
 
 const sizeClasses = {
-  default: 'h-9 px-4 py-2',
-  sm: 'h-8 rounded-md px-3 text-[12px]',
-  lg: 'h-10 rounded-md px-6',
-  icon: 'size-9'
+  default: 'h-10 px-5 py-2',
+  sm: 'h-9 rounded-md px-3 text-[13px]',
+  lg: 'h-11 rounded-md px-8',
+  icon: 'size-10'
 } as const;
 
 export type ButtonVariant = keyof typeof variantClasses;
@@ -33,7 +33,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       <button
         type={type}
         className={cn(
-          'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border text-[13px] font-medium transition-colors',
+          'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border text-[14px] font-medium transition-colors',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/55',
           'disabled:pointer-events-none disabled:opacity-55',
           variantClasses[variant],
