@@ -313,6 +313,15 @@ type McpServerOption = {
   resources: string[];
 };
 
+type CommandPaletteAction = {
+  id: string;
+  label: string;
+  hint: string;
+  keywords: string;
+  disabled?: boolean;
+  run: () => void | Promise<void>;
+};
+
 type ThemePalette = {
   background: string;
   backgroundWeak: string;
@@ -2038,12 +2047,16 @@ export default function OpenCodeMonitorPage() {
   const [eventDebugEvents, setEventDebugEvents] = useState<OpenCodeDebugEvent[]>([]);
   const [isTranscriptRunning, setIsTranscriptRunning] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [commandPaletteQuery, setCommandPaletteQuery] = useState('');
+  const [commandPaletteIndex, setCommandPaletteIndex] = useState(0);
 
   const activeSessionIdRef = useRef<string | null>(null);
   const refreshMonitorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshSessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const composerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const commandPaletteInputRef = useRef<HTMLInputElement | null>(null);
   const ptySocketRef = useRef<WebSocket | null>(null);
   const ptyReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ptyReconnectAttemptRef = useRef(0);
@@ -2074,6 +2087,18 @@ export default function OpenCodeMonitorPage() {
     },
     []
   );
+
+  const openCommandPalette = useCallback(() => {
+    setIsCommandPaletteOpen(true);
+    setCommandPaletteQuery('');
+    setCommandPaletteIndex(0);
+  }, []);
+
+  const closeCommandPalette = useCallback(() => {
+    setIsCommandPaletteOpen(false);
+    setCommandPaletteQuery('');
+    setCommandPaletteIndex(0);
+  }, []);
 
   const refreshMonitor = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) setIsMonitorLoading(true);
@@ -2245,6 +2270,35 @@ export default function OpenCodeMonitorPage() {
     if (!viewport) return;
     viewport.scrollTop = viewport.scrollHeight;
   }, [ptyStreamOutput]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && key === 'k') {
+        event.preventDefault();
+        openCommandPalette();
+        return;
+      }
+      if (isCommandPaletteOpen && event.key === 'Escape') {
+        event.preventDefault();
+        closeCommandPalette();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [closeCommandPalette, isCommandPaletteOpen, openCommandPalette]);
+
+  useEffect(() => {
+    if (!isCommandPaletteOpen) return;
+    const timer = setTimeout(() => {
+      commandPaletteInputRef.current?.focus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [isCommandPaletteOpen]);
+
+  useEffect(() => {
+    setCommandPaletteIndex(0);
+  }, [commandPaletteQuery]);
 
   useEffect(() => {
     let disposed = false;
@@ -4539,6 +4593,172 @@ export default function OpenCodeMonitorPage() {
     ]
   );
 
+  const commandPaletteActions: CommandPaletteAction[] = [
+    {
+      id: 'palette-refresh',
+      label: 'Refresh monitor + session',
+      hint: 'Reload monitor, session detail, and timeline',
+      keywords: 'refresh monitor session timeline',
+      run: handleRefresh
+    },
+    {
+      id: 'palette-focus-composer',
+      label: 'Focus composer',
+      hint: 'Jump cursor to the advanced composer prompt box',
+      keywords: 'composer focus prompt',
+      run: () => {
+        composerTextareaRef.current?.focus();
+      }
+    },
+    {
+      id: 'palette-submit-composer',
+      label: 'Submit composer prompt',
+      hint: 'Dispatch the current composer payload',
+      keywords: 'composer send submit prompt',
+      disabled: !composerCanSubmit,
+      run: () => void handleSendPrompt()
+    },
+    {
+      id: 'palette-clear-composer',
+      label: 'Clear composer prompt',
+      hint: 'Reset prompt text and attachment context',
+      keywords: 'composer clear prompt reset',
+      disabled: !quickPrompt.trim() && composerAttachments.length === 0,
+      run: () => {
+        setQuickPrompt('');
+        setComposerAttachments([]);
+        setComposerSuggestionIndex(0);
+      }
+    },
+    {
+      id: 'palette-create-session',
+      label: 'Create session',
+      hint: 'Create a new OpenCode session',
+      keywords: 'session create new',
+      disabled: isOperationRunning,
+      run: () => void handleCreateSession()
+    },
+    {
+      id: 'palette-undo-session',
+      label: 'Undo session',
+      hint: 'Run /session/:id/revert (undo)',
+      keywords: 'session undo revert',
+      disabled: !activeSessionId || isOperationRunning,
+      run: () => void handleUndoSession()
+    },
+    {
+      id: 'palette-redo-session',
+      label: 'Redo session',
+      hint: 'Run /session/:id/unrevert (redo)',
+      keywords: 'session redo unrevert',
+      disabled: !activeSessionId || isOperationRunning,
+      run: () => void handleRedoSession()
+    },
+    {
+      id: 'palette-pty-refresh',
+      label: 'Refresh PTY list',
+      hint: 'Reload PTY sessions in Terminal Dock',
+      keywords: 'pty terminal refresh list',
+      run: () => void refreshPtyList()
+    },
+    {
+      id: 'palette-pty-connect',
+      label: 'Connect PTY stream',
+      hint: 'Open websocket stream for selected PTY',
+      keywords: 'pty terminal connect stream',
+      disabled: !selectedPtyId || ptyStreamState === 'connecting' || ptyStreamState === 'reconnecting',
+      run: handleConnectPtyStream
+    },
+    {
+      id: 'palette-pty-disconnect',
+      label: 'Disconnect PTY stream',
+      hint: 'Stop websocket stream for selected PTY',
+      keywords: 'pty terminal disconnect stream',
+      disabled: ptyStreamState === 'idle',
+      run: handleDisconnectPtyStream
+    },
+    ...TUI_SHORTCUTS.map((shortcut) => ({
+      id: `palette-tui-${shortcut.path}`,
+      label: `TUI: ${shortcut.label}`,
+      hint: shortcut.path,
+      keywords: `tui ${shortcut.label.toLowerCase()} ${shortcut.path.toLowerCase()}`,
+      disabled: isOperationRunning,
+      run: () => void handleTuiShortcut(shortcut.path)
+    })),
+    {
+      id: 'palette-tui-execute',
+      label: `TUI execute: ${tuiCommand}`,
+      hint: 'Execute current /tui/execute-command payload',
+      keywords: `tui execute command ${tuiCommand.toLowerCase()}`,
+      disabled: isOperationRunning,
+      run: () => void handleTuiCommand()
+    }
+  ];
+
+  const filteredCommandPaletteActions = (() => {
+    const query = commandPaletteQuery.trim().toLowerCase();
+    if (!query) return commandPaletteActions;
+    return commandPaletteActions.filter((action) => {
+      const haystack = `${action.label} ${action.hint} ${action.keywords}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  })();
+
+  const normalizedCommandPaletteIndex =
+    filteredCommandPaletteActions.length === 0
+      ? 0
+      : Math.min(commandPaletteIndex, Math.max(0, filteredCommandPaletteActions.length - 1));
+
+  const selectedCommandPaletteAction =
+    filteredCommandPaletteActions.length > 0 ? filteredCommandPaletteActions[normalizedCommandPaletteIndex] : null;
+
+  const runCommandPaletteAction = useCallback(
+    (action: CommandPaletteAction | null) => {
+      if (!action || action.disabled) return;
+      closeCommandPalette();
+      void Promise.resolve(action.run()).catch((error) => {
+        setOperationError(error instanceof Error ? error.message : 'Command palette action failed.');
+      });
+    },
+    [closeCommandPalette]
+  );
+
+  const handleCommandPaletteKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        if (filteredCommandPaletteActions.length === 0) return;
+        setCommandPaletteIndex((current) => (current + 1) % filteredCommandPaletteActions.length);
+        return;
+      }
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (filteredCommandPaletteActions.length === 0) return;
+        setCommandPaletteIndex(
+          (current) => (current - 1 + filteredCommandPaletteActions.length) % filteredCommandPaletteActions.length
+        );
+        return;
+      }
+
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        runCommandPaletteAction(selectedCommandPaletteAction);
+      }
+    },
+    [filteredCommandPaletteActions.length, runCommandPaletteAction, selectedCommandPaletteAction]
+  );
+
+  useEffect(() => {
+    if (filteredCommandPaletteActions.length === 0) {
+      if (commandPaletteIndex !== 0) setCommandPaletteIndex(0);
+      return;
+    }
+    if (commandPaletteIndex >= filteredCommandPaletteActions.length) {
+      setCommandPaletteIndex(0);
+    }
+  }, [commandPaletteIndex, filteredCommandPaletteActions.length]);
+
   return (
     <div className="oc-app min-h-screen" style={themeStyle}>
       <div className="mx-auto w-full max-w-[1540px] px-4 py-5 md:px-6 md:py-7">
@@ -4634,6 +4854,11 @@ export default function OpenCodeMonitorPage() {
                 events: {eventConnectionState}
               </Badge>
               <Badge>{eventDebugEvents.length} event log</Badge>
+              <Button size="sm" variant="secondary" onClick={openCommandPalette}>
+                <Command className="h-3.5 w-3.5" />
+                command palette
+              </Button>
+              <Badge>Ctrl/Cmd + K</Badge>
             </div>
           </CardHeader>
         </Card>
@@ -6441,6 +6666,74 @@ export default function OpenCodeMonitorPage() {
           </section>
         </div>
       </div>
+
+      {isCommandPaletteOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close command palette"
+            className="absolute inset-0 bg-black/40"
+            onClick={closeCommandPalette}
+          />
+          <Card className="oc-panel relative z-10 w-full max-w-2xl" onClick={(event) => event.stopPropagation()}>
+            <CardHeader className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="flex items-center gap-2">
+                  <Command className="h-4 w-4 text-[var(--accent)]" />
+                  Command Palette
+                </CardTitle>
+                <Button size="sm" variant="secondary" onClick={closeCommandPalette}>
+                  <X className="h-3.5 w-3.5" />
+                  close
+                </Button>
+              </div>
+              <CardDescription>Keyboard-driven operations and TUI shortcuts (Ctrl/Cmd+K).</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Input
+                ref={commandPaletteInputRef}
+                value={commandPaletteQuery}
+                onChange={(event) => setCommandPaletteQuery(event.target.value)}
+                onKeyDown={handleCommandPaletteKeyDown}
+                placeholder="Search actions..."
+              />
+
+              <div className="oc-scroll max-h-72 space-y-2 overflow-y-auto">
+                {filteredCommandPaletteActions.length === 0 && (
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] px-3 py-4 text-center text-[12px] text-[var(--text-weak)]">
+                    No matching actions.
+                  </div>
+                )}
+
+                {filteredCommandPaletteActions.map((action, index) => {
+                  const selected = index === normalizedCommandPaletteIndex;
+                  return (
+                    <button
+                      key={action.id}
+                      type="button"
+                      onMouseEnter={() => setCommandPaletteIndex(index)}
+                      onClick={() => runCommandPaletteAction(action)}
+                      disabled={action.disabled}
+                      className={cn(
+                        'w-full rounded-lg border px-3 py-2 text-left transition-colors',
+                        selected
+                          ? 'border-[var(--border-selected)] bg-[var(--accent-soft)]'
+                          : 'border-[var(--border-weak)] bg-[var(--surface-base)] hover:bg-[var(--surface-hover)]',
+                        action.disabled && 'cursor-not-allowed opacity-55'
+                      )}
+                    >
+                      <p className="text-[12px] font-medium text-[var(--text-strong)]">{action.label}</p>
+                      <p className="mt-0.5 text-[11px] text-[var(--text-weaker)]">{action.hint}</p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <p className="text-[11px] text-[var(--text-weaker)]">Enter to run · Arrow keys to navigate · Esc to close</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {isProviderModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

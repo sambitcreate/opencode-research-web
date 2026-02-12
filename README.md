@@ -31,6 +31,7 @@ Local-first OpenCode control plane for monitoring and executing OpenCode operati
   - OpenCode API compatibility diagnostics (required/recommended endpoint/method checks against live OpenAPI),
   - session operation runner (fork/revert/share/summarize/delete/etc),
   - permission and question response queues,
+  - keyboard command palette (`Ctrl/Cmd + K`) with searchable operations,
   - TUI command shortcuts (`/tui/*` routes),
   - OpenAPI-backed API explorer for arbitrary endpoint execution.
 

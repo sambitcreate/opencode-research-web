@@ -143,7 +143,7 @@ Last updated: February 11, 2026
 - [x] Add live PTY stream connection.
 - [x] Add PTY input + resize actions.
 - [x] Add reconnect handling for PTY sessions.
-- [ ] Add command palette parity for keyboard-driven operations.
+- [x] Add command palette parity for keyboard-driven operations.
 
 ## Cross-Cutting Engineering Tasks
 
@@ -179,6 +179,10 @@ Last updated: February 11, 2026
 
 ## Done Log
 
+- [x] 2026-02-12: Added command palette parity for keyboard-driven operations:
+  - Global shortcut `Ctrl/Cmd + K` opens a searchable command palette modal
+  - Keyboard navigation (`ArrowUp`, `ArrowDown`, `Enter`, `Escape`) and click execution
+  - Palette actions wired to monitor/session refresh, composer focus/send/clear, session undo/redo, PTY connect/disconnect/list refresh, and TUI shortcuts/command execution
 - [x] 2026-02-12: Completed PTY terminal streaming parity slice in Terminal Dock:
   - Added direct browser websocket stream connection to OpenCode `/pty/:ptyID/connect` using status-derived `apiUrl` (with host/port fallback)
   - Added live output panel with cursor tracking and bounded buffer
