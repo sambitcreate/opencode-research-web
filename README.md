@@ -173,6 +173,15 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
   - Output:
     - `{ mode, request, result }`
 
+- `GET /api/opencode/system`
+  - Aggregate system/config/project/runtime snapshot route.
+  - Query params:
+    - `include` optional CSV:
+      - `config,global/config,project,project/current,mcp,lsp,formatter,path,vcs`
+    - `autostart=1` optional
+  - Output:
+    - `{ status, include, sections, errors }`
+
 - `GET /api/opencode/openapi`
   - Returns parsed OpenCode OpenAPI endpoint snapshot for explorer UX.
   - Attempts live OpenCode spec first; falls back to an embedded endpoint manifest.
@@ -244,6 +253,7 @@ Optional live smoke test:
 - `src/app/api/opencode/monitor/route.ts` aggregated monitor snapshot route
 - `src/app/api/opencode/control/route.ts` generic OpenCode control executor
 - `src/app/api/opencode/files/route.ts` mode-based file/find passthrough route
+- `src/app/api/opencode/system/route.ts` aggregate system/config/project route
 - `src/app/api/opencode/openapi/route.ts` OpenAPI snapshot route
 - `src/app/api/opencode/sessions/route.ts` session list/detail route
 - `src/app/api/opencode/status/route.ts` engine status route

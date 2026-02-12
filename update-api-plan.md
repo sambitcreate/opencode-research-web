@@ -112,7 +112,7 @@ Last updated: February 11, 2026
   - `list` -> `/file`
   - `content` -> `/file/content`
   - `status` -> `/file/status`
-- [ ] Add `GET /api/opencode/system` aggregate route for:
+- [x] Add `GET /api/opencode/system` aggregate route for:
   - `config`
   - `global/config`
   - `project`
@@ -216,3 +216,6 @@ Last updated: February 11, 2026
 - [x] 2026-02-11: Added `/api/opencode/files` mode-based passthrough route:
   - Supports `findText`, `findFile`, `list`, `content`, and `status` modes
   - Forwards additional query params to mapped OpenCode endpoints
+- [x] 2026-02-11: Added `/api/opencode/system` aggregate route:
+  - Supports additive `include=` selection across config/project/mcp/lsp/formatter/path/vcs snapshots
+  - Returns per-section invocation result envelopes and aggregated errors
