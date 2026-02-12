@@ -136,7 +136,7 @@ Last updated: February 11, 2026
 
 ### API
 - [x] Expose PTY lifecycle over HTTP (`list/create/update/delete`) as short-term baseline.
-- [ ] Run implementation spike for PTY websocket proxy feasibility in Next runtime.
+- [x] Run implementation spike for PTY websocket proxy feasibility in Next runtime.
 
 ### UI
 - [x] Add terminal dock with PTY session create/select/remove.
@@ -192,6 +192,9 @@ Last updated: February 11, 2026
   - Added additive monitor include flag `compatibility`
   - Added compatibility report generation (required/recommended endpoint+method checks) in `src/lib/opencode.ts`
   - Surfaced compatibility status/report in Engine Snapshot UI and updated README monitor docs
+- [x] 2026-02-12: Added PTY websocket feasibility spike route:
+  - `GET /api/opencode/pty/:ptyId/connect` probes upstream connect endpoint and reports feasibility diagnostics
+  - Documents that transparent websocket upgrade proxying is not provided by the current Next route-handler path
 - [x] 2026-02-11: Converted this document from narrative plan to checklist-style tracker.
 - [x] 2026-02-11: Completed initial P0 API backend slice:
   - `/api/opencode/events` SSE bridge (`scope`, `autostart`, source-tagged normalized events with `seq`)

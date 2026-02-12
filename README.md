@@ -185,6 +185,15 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
   - Output:
     - `{ request, result }` where `result` is `{ ok, status, contentType, data, text }`
 
+- `GET /api/opencode/pty/:ptyId/connect`
+  - PTY websocket feasibility probe route (implementation spike).
+  - Query params:
+    - `autostart=1|true` optional
+  - Probes upstream `/pty/:ptyId/connect` and returns:
+    - `probe` (upstream response envelope),
+    - `feasibility` summary including websocket/upgrade likelihood and proxying constraints in Next route handlers.
+  - Note: this route is diagnostic and does not provide live PTY stream passthrough.
+
 - `GET /api/opencode/files`
   - Mode-based file/find passthrough route.
   - Query params:
@@ -286,6 +295,7 @@ Optional live smoke test:
 - `src/app/api/opencode/openapi/route.ts` OpenAPI snapshot route
 - `src/app/api/opencode/pty/route.ts` PTY lifecycle list/create route
 - `src/app/api/opencode/pty/[ptyId]/route.ts` PTY lifecycle update/delete route
+- `src/app/api/opencode/pty/[ptyId]/connect/route.ts` PTY websocket feasibility probe route
 - `src/app/api/opencode/sessions/route.ts` session list/detail route
 - `src/app/api/opencode/status/route.ts` engine status route
 - `src/app/api/query/route.ts` legacy research query route
