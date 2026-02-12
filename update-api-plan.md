@@ -21,11 +21,11 @@ Last updated: February 12, 2026
 
 ## Guardrails (Do Not Break)
 
-- [ ] Keep app local-first.
-- [ ] Keep automatic OpenCode startup on research requests.
-- [ ] Keep `runtime = 'nodejs'` for process-spawning routes.
-- [ ] Preserve env-driven overrides (`OPENCODE_COMMAND`, `OPENCODE_API_URL`).
-- [ ] Keep current frontend contracts backward-compatible:
+- [x] Keep app local-first.
+- [x] Keep automatic OpenCode startup on research requests.
+- [x] Keep `runtime = 'nodejs'` for process-spawning routes.
+- [x] Preserve env-driven overrides (`OPENCODE_COMMAND`, `OPENCODE_API_URL`).
+- [x] Keep current frontend contracts backward-compatible:
   - Query result: `id`, `query`, `status`, `sessionId`, `answer`, `sources`, `metadata`, `timestamp`
   - Sessions list: `running`, `host`, `port`, `started`, `count`, `sessions`
   - Session detail: `running`, `host`, `port`, `started`, `session`, `messages`, `messageCount`, `latestMessageAt`, `activeToolCalls`
@@ -199,6 +199,15 @@ Last updated: February 12, 2026
 
 ## Done Log
 
+- [x] 2026-02-12: Added explicit guardrail automation and unified autostart query parsing:
+  - Added shared query-flag parser (`src/lib/opencode-route-utils.ts`) and normalized all API route `autostart` reads to support `1|true` and `0|false`
+  - Added `scripts/check-guardrails.mjs` + `npm run check:guardrails` to enforce key non-negotiables:
+    - `runtime = 'nodejs'` on all `src/app/api/**/route.ts` handlers
+    - local-first host fallback (`127.0.0.1`) in OpenCode glue
+    - env-driven overrides (`OPENCODE_API_URL`, `OPENCODE_COMMAND`)
+    - query autostart path via `runResearchQuery()` -> `ensureOpenCodeServer()`
+  - Updated `README.md` command/verification docs and route query-param docs for consistent `autostart=1|true` notation
+  - Verified with `npm run check:guardrails`, `npm run lint`, and `npm run build -- --webpack`
 - [x] 2026-02-12: Removed legacy forced "research assistant" prompt wrapper from compatibility query flow:
   - `buildResearchPrompt()` now forwards raw query text only (no fixed 3-findings + sources template injection)
   - Updated docs/metadata wording to align with monitor/control-first app positioning

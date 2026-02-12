@@ -113,7 +113,7 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
     - `sessionId` optional (detail mode)
     - `messageLimit` optional (default 120)
     - `include` optional CSV for detail mode (`messages,todo,diff,children`)
-    - `autostart=1` optional
+    - `autostart=1|true` optional
   - List mode contract preserved:
     - `running`, `host`, `port`, `started`, `count`, `sessions`
   - Detail mode contract preserved:
@@ -124,7 +124,7 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
 - `GET /api/opencode/session/:sessionId/timeline`
   - User-message-centric timeline output for session workbench UIs.
   - Query params:
-    - `autostart=1` optional
+    - `autostart=1|true` optional
   - Returns:
     - `running`, `host`, `port`, `started`, `sessionId`, `count`, `entries`
     - each entry includes `messageId`, `preview`, `createdAt`, `assistantMessageId`, `assistantState`, `hasDiffMarker`
@@ -135,14 +135,14 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
     - `thinking=1|true` optional
     - `toolDetails=1|true` optional
     - `assistantMetadata=1|true` optional
-    - `autostart=1` optional
+    - `autostart=1|true` optional
   - Returns:
     - `running`, `host`, `port`, `started`, `sessionId`, `title`, `generatedAt`, `messageCount`, `options`, `markdown`
 
 - `GET /api/opencode/monitor`
   - Aggregated monitor snapshot for the dashboard.
   - Query params:
-    - `autostart=1` optional
+    - `autostart=1|true` optional
     - `sessionLimit` optional (default 80)
     - `permissionLimit` optional (default 80)
     - `questionLimit` optional (default 80)
@@ -216,7 +216,7 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
       - `list` -> `/file`
       - `content` -> `/file/content`
       - `status` -> `/file/status`
-    - `autostart=1` optional
+    - `autostart=1|true` optional
     - any other query params are forwarded directly to the mapped OpenCode endpoint
   - Output:
     - `{ mode, request, result }`
@@ -226,7 +226,7 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
   - Query params:
     - `include` optional CSV:
       - `config,global/config,project,project/current,mcp,lsp,formatter,path,vcs`
-    - `autostart=1` optional
+    - `autostart=1|true` optional
   - Output:
     - `{ status, include, sections, errors }`
 
@@ -241,7 +241,7 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
   - SSE bridge for OpenCode event streams with normalized payloads.
   - Query params:
     - `scope=instance|global|both` optional (default `instance`)
-    - `autostart=1` optional
+    - `autostart=1|true` optional
   - Emits SSE events:
     - `ready`, `source_open`, `event`, `source_closed`, `source_error`, `complete`
   - `event` payloads include source-tagged normalized objects with monotonic `seq`.
@@ -250,6 +250,7 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
 
 ```bash
 npm run dev
+npm run check:guardrails
 npm run lint
 npm run build -- --webpack
 npm run smoke:api
@@ -263,6 +264,7 @@ Reference repositories under `reference/` are intentionally excluded from app li
 ```bash
 npm run lint
 npm run build -- --webpack
+npm run check:guardrails
 ```
 
 Optional live smoke test:
@@ -277,6 +279,12 @@ Optional live smoke test:
    - respond to pending permission/question (if any),
    - run one `/tui/*` shortcut,
    - run one arbitrary API request via explorer.
+
+`check:guardrails` validates:
+- every `src/app/api/**/route.ts` handler keeps `runtime = 'nodejs'`
+- `src/lib/opencode.ts` keeps local-first host fallback (`127.0.0.1`)
+- `src/lib/opencode.ts` keeps env overrides (`OPENCODE_API_URL`, `OPENCODE_COMMAND`)
+- `runResearchQuery()` still autostarts OpenCode via `ensureOpenCodeServer()`
 
 `smoke:api` validates:
 - `/api/opencode/status` contract
