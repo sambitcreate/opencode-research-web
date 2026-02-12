@@ -7,6 +7,7 @@ import {
   TEXT_ATTACHMENT_EXTENSIONS
 } from './constants';
 import type {
+  ComposerMention,
   ComposerToken,
   EventRefreshScope,
   McpServerOption,
@@ -148,6 +149,50 @@ export function extractComposerToken(value: string, caretPosition: number): Comp
     start: safeCaret - raw.length,
     end: safeCaret
   };
+}
+
+export function parseComposerMentions(value: string): ComposerMention[] {
+  const mentions: ComposerMention[] = [];
+  const seen = new Set<string>();
+  const pattern = /(^|\s)@(file|agent|mcp):([^\s]+)/gi;
+  let match: RegExpExecArray | null = pattern.exec(value);
+
+  while (match) {
+    const leading = match[1] ?? '';
+    const categoryRaw = (match[2] || '').toLowerCase();
+    const mentionValue = (match[3] || '').trim();
+    if (mentionValue && (categoryRaw === 'file' || categoryRaw === 'agent' || categoryRaw === 'mcp')) {
+      const category = categoryRaw;
+      const key = `${category}:${mentionValue.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        mentions.push({
+          category,
+          value: mentionValue,
+          token: `@${category}:${mentionValue}`,
+          index: match.index + leading.length,
+          length: category.length + mentionValue.length + 2
+        });
+      }
+    }
+
+    if (mentions.length >= 40) break;
+    match = pattern.exec(value);
+  }
+
+  return mentions;
+}
+
+export function stripComposerMentions(value: string, categories?: ComposerMention['category'][]): string {
+  const allowed = categories ? new Set(categories) : null;
+  const pattern = /(^|\s)@(file|agent|mcp):([^\s]+)/gi;
+  const replaced = value.replace(pattern, (full, leading, rawCategory) => {
+    const category = String(rawCategory || '').toLowerCase() as ComposerMention['category'];
+    if (allowed && !allowed.has(category)) return full;
+    return leading || '';
+  });
+
+  return replaced.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 export function appendRawQueryParams(params: URLSearchParams, raw: string): void {

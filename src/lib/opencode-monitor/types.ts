@@ -228,6 +228,14 @@ export type ComposerToken = {
   end: number;
 };
 
+export type ComposerMention = {
+  category: ComposerMentionCategory;
+  value: string;
+  token: string;
+  index: number;
+  length: number;
+};
+
 export type ComposerSuggestion = {
   id: string;
   kind: 'slash' | 'mention';

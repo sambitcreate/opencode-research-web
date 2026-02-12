@@ -189,7 +189,7 @@ Last updated: February 12, 2026
 
 - [x] Manage sessions end-to-end in web UI:
   - create/select/search/fork/share/rename/archive/delete/undo/redo/summarize
-- [ ] Send prompts in normal/command/shell paths with mentions and attachments.
+- [x] Send prompts in normal/command/shell paths with mentions and attachments.
 - [x] Handle permission and question prompts with full context.
 - [ ] Manage provider auth, models, agents, and variants.
 - [ ] Manage MCP connections/auth/resources.
@@ -199,6 +199,11 @@ Last updated: February 12, 2026
 
 ## Done Log
 
+- [x] 2026-02-12: Improved composer mention handling across prompt/command/shell flows:
+  - Added parser/normalizer for `@file:`, `@agent:`, and `@mcp:` mentions in composer text
+  - Prompt/command payloads now append structured mention context blocks alongside attachment context
+  - Shell mode now strips mentions from command text before dispatch and uses `@agent:` as fallback shell agent selection
+  - Verified with `npm run lint` and `npm run build -- --webpack`
 - [x] 2026-02-12: Expanded permission/question queue context handling for safer operator actions:
   - Enhanced permission context extraction to include permission name, patterns, always-allow candidates, metadata summaries, and tool call IDs
   - Enhanced question context extraction to include per-question headers/text/options and tool call IDs

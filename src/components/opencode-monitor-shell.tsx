@@ -104,6 +104,8 @@ const {
   collectStringFields,
   collectLikelyFilePaths,
   extractComposerToken,
+  parseComposerMentions,
+  stripComposerMentions,
   appendRawQueryParams,
   summarizeDraftDiff,
   asRecord,
@@ -1311,12 +1313,53 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
     if (!activeSessionId) return;
 
     const trimmedPrompt = quickPrompt.trim();
+    const mentions = parseComposerMentions(quickPrompt);
+    const fileMentions = toUniqueStrings(
+      mentions.filter((mention) => mention.category === 'file').map((mention) => mention.value),
+      24
+    );
+    const agentMentions = toUniqueStrings(
+      mentions.filter((mention) => mention.category === 'agent').map((mention) => mention.value),
+      12
+    );
+    const mcpMentions = toUniqueStrings(
+      mentions.filter((mention) => mention.category === 'mcp').map((mention) => mention.value),
+      24
+    );
+    const resolvedMcpMentions = mcpMentions.map((mention) => {
+      const matchedServer = mcpServers.find(
+        (server) => server.name.toLowerCase() === mention.toLowerCase() || server.label.toLowerCase() === mention.toLowerCase()
+      );
+      if (matchedServer) {
+        const status = matchedServer.status || (matchedServer.connected === true ? 'connected' : 'unknown');
+        return `${mention} (server:${status})`;
+      }
+      const resourceHost = mcpServers.find((server) =>
+        server.resources.some((resource) => resource.toLowerCase() === mention.toLowerCase())
+      );
+      if (resourceHost) {
+        return `${mention} (resource:${resourceHost.name})`;
+      }
+      return mention;
+    });
+    const mentionLines: string[] = [];
+    if (fileMentions.length > 0) mentionLines.push(`- file mentions: ${fileMentions.join(', ')}`);
+    if (agentMentions.length > 0) mentionLines.push(`- agent mentions: ${agentMentions.join(', ')}`);
+    if (resolvedMcpMentions.length > 0) mentionLines.push(`- mcp mentions: ${resolvedMcpMentions.join(', ')}`);
+    const mentionContext = mentionLines.length > 0 ? ['Mention context:', ...mentionLines].join('\n') : '';
+    const shellCommandText = stripComposerMentions(quickPrompt, ['agent', 'file', 'mcp']).trim();
+    const resolvedShellAgent = composerShellAgent.trim() || agentMentions[0] || '';
+
     if (composerMode === 'command' && !composerCommand.trim()) return;
     if (composerMode === 'shell' && !trimmedPrompt) return;
     if (composerMode !== 'command' && composerMode !== 'shell' && !trimmedPrompt && composerAttachments.length === 0) return;
 
     if (composerMode === 'shell' && composerAttachments.length > 0) {
       setOperationError('Attachments are currently supported for prompt/command mode only.');
+      return;
+    }
+    if (composerMode === 'shell' && !shellCommandText) {
+      setOperationError('Shell command is empty after mention parsing.');
       return;
     }
 
@@ -1326,10 +1369,11 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
 
     try {
       const attachmentContext = await buildComposerAttachmentContext();
+      const sharedContext = [mentionContext, attachmentContext].filter(Boolean).join('\n\n').trim();
       let response: OpenCodeControlResponse;
 
       if (composerMode === 'prompt-sync' || composerMode === 'prompt-async') {
-        const promptText = [trimmedPrompt, attachmentContext].filter(Boolean).join('\n\n').trim();
+        const promptText = [trimmedPrompt, sharedContext].filter(Boolean).join('\n\n').trim();
         const path =
           composerMode === 'prompt-async'
             ? `/session/${encodeURIComponent(activeSessionId)}/prompt_async`
@@ -1343,7 +1387,7 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
           }
         });
       } else if (composerMode === 'command') {
-        const argumentText = [trimmedPrompt, attachmentContext].filter(Boolean).join('\n\n').trim();
+        const argumentText = [trimmedPrompt, sharedContext].filter(Boolean).join('\n\n').trim();
         const body: Record<string, unknown> = { command: composerCommand.trim() };
         if (argumentText) body.arguments = argumentText;
         response = await callControl({
@@ -1352,8 +1396,8 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
           body
         });
       } else {
-        const body: Record<string, unknown> = { command: trimmedPrompt };
-        if (composerShellAgent.trim()) body.agent = composerShellAgent.trim();
+        const body: Record<string, unknown> = { command: shellCommandText };
+        if (resolvedShellAgent) body.agent = resolvedShellAgent;
         response = await callControl({
           path: `/session/${encodeURIComponent(activeSessionId)}/shell`,
           method: 'POST',
@@ -1391,6 +1435,7 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
     composerCommand,
     composerMode,
     composerShellAgent,
+    mcpServers,
     quickPrompt,
     refreshMonitor,
     refreshSessionDetail,

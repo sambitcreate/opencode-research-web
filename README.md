@@ -20,6 +20,7 @@ Local-first OpenCode control plane for monitoring and executing OpenCode operati
   - session side summaries (todo, diff, context/cost when reported),
   - advanced session composer with mode switching (`prompt`, `async`, `command`, `shell`),
   - slash autocomplete (`/prompt`, `/async`, `/command`, `/shell`) and mention autocomplete (`@file:`, `@agent:`, `@mcp:`),
+  - mention-aware dispatch handling (context blocks for prompt/command, shell-safe mention stripping, `@agent` shell-agent fallback),
   - image/file attachments (compact inline context for prompt/command),
   - provider connect modal (auth method discovery, OAuth authorize/callback, API key submission),
   - provider-grouped model picker + model variant selector with session init apply,
