@@ -250,6 +250,7 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
 npm run dev
 npm run lint
 npm run build -- --webpack
+npm run smoke:api
 npm run start
 ```
 
@@ -265,17 +266,22 @@ npm run build -- --webpack
 Optional live smoke test:
 
 1. Start app: `npm run dev`
-2. Check engine: `GET /api/opencode/status`
-3. Check monitor: `GET /api/opencode/monitor`
-4. List sessions: `GET /api/opencode/sessions`
-5. Execute control call: `POST /api/opencode/control` with `{ "path": "/global/health", "method": "GET" }`
-6. From UI:
+2. Run API smoke checks: `npm run smoke:api`
+3. Execute control call: `POST /api/opencode/control` with `{ "path": "/global/health", "method": "GET" }`
+4. From UI:
    - create/select session,
    - send prompt,
    - run one session operation (share/revert/fork/etc),
    - respond to pending permission/question (if any),
    - run one `/tui/*` shortcut,
    - run one arbitrary API request via explorer.
+
+`smoke:api` validates:
+- `/api/opencode/status` contract
+- `/api/opencode/sessions` list contract
+- `/api/opencode/monitor` contract
+- `/api/opencode/events?scope=both` ready-event stream handshake
+- `/api/query` compatibility contract and, when query execution succeeds, session detail visibility + `metadata.opencode.started`
 
 ## Troubleshooting
 
@@ -310,5 +316,6 @@ Optional live smoke test:
 - `src/app/api/opencode/sessions/route.ts` session list/detail route
 - `src/app/api/opencode/status/route.ts` engine status route
 - `src/app/api/query/route.ts` legacy research query route
+- `scripts/smoke-opencode-api.mjs` repeatable live API smoke validation
 - `src/app/globals.css` visual theme and shell styles
 - `src/components/ui/*` shadcn-style UI primitives

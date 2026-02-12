@@ -149,7 +149,7 @@ Last updated: February 12, 2026
 
 - [x] Build typed backend service adapter module (no scattered direct `fetch` in components).
 - [x] Add event method-router layer before reducer mutation.
-- [ ] Keep optional/additive response fields only (no breaking contract changes).
+- [x] Keep optional/additive response fields only (no breaking contract changes).
 - [x] Add compatibility checks when OpenCode API evolves.
 - [x] Keep monitor payload size bounded (include flags + lazy loads).
 
@@ -177,10 +177,10 @@ Last updated: February 12, 2026
 
 - [x] `npm run lint`
 - [x] `npm run build -- --webpack`
-- [ ] Live smoke: `GET /api/opencode/status`
-- [ ] Live smoke: `GET /api/opencode/sessions`
-- [ ] Live smoke: `GET /api/opencode/monitor`
-- [ ] Live smoke: `GET /api/opencode/events` receives stream events
+- [x] Live smoke: `GET /api/opencode/status`
+- [x] Live smoke: `GET /api/opencode/sessions`
+- [x] Live smoke: `GET /api/opencode/monitor`
+- [x] Live smoke: `GET /api/opencode/events` receives stream events
 - [ ] Live smoke: `POST /api/query` still autostarts OpenCode as needed
 - [ ] Verify `metadata.opencode.started` behavior unchanged
 - [ ] Verify session + message visibility in `/api/opencode/sessions?sessionId=<id>`
@@ -191,14 +191,20 @@ Last updated: February 12, 2026
   - create/select/search/fork/share/rename/archive/delete/undo/redo/summarize
 - [x] Send prompts in normal/command/shell paths with mentions and attachments.
 - [x] Handle permission and question prompts with full context.
-- [ ] Manage provider auth, models, agents, and variants.
-- [ ] Manage MCP connections/auth/resources.
-- [ ] Inspect todos/diffs/messages/timeline and export transcripts.
-- [ ] Use file/project/config/worktree workflows.
-- [ ] Monitor and operate runtime status with real-time updates.
+- [x] Manage provider auth, models, agents, and variants.
+- [x] Manage MCP connections/auth/resources.
+- [x] Inspect todos/diffs/messages/timeline and export transcripts.
+- [x] Use file/project/config/worktree workflows.
+- [x] Monitor and operate runtime status with real-time updates.
 
 ## Done Log
 
+- [x] 2026-02-12: Hardened compatibility contracts and added repeatable API smoke verification:
+  - `POST /api/query` now returns the legacy compatibility envelope for both success and failure paths (`status`, `sessionId`, `answer`, `sources`, `metadata`, `timestamp` always present)
+  - `GET /api/opencode/sessions` list mode now preserves list-contract keys even on route errors (`running`, `host`, `port`, `started`, `count`, `sessions`) with additive `error`
+  - Added `scripts/smoke-opencode-api.mjs` and `npm run smoke:api` to validate status/sessions/monitor/events/query contracts
+  - Updated `README.md` verification docs with the new smoke workflow
+  - Verified with `npm run lint`, `npm run build -- --webpack`, and `npm run smoke:api` (query returned HTTP 500 in this environment but contract check passed)
 - [x] 2026-02-12: Improved composer mention handling across prompt/command/shell flows:
   - Added parser/normalizer for `@file:`, `@agent:`, and `@mcp:` mentions in composer text
   - Prompt/command payloads now append structured mention context blocks alongside attachment context
