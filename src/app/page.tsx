@@ -205,6 +205,7 @@ type OpenCodeControlResponse = {
 };
 
 type EventConnectionState = 'connecting' | 'connected' | 'error';
+type EventRefreshScope = 'none' | 'monitor' | 'monitor-session';
 
 type OpenCodeDebugEvent = {
   id: string;
@@ -332,6 +333,56 @@ const MONITOR_POLL_MS_DISCONNECTED = 12_000;
 const MONITOR_POLL_MS_CONNECTED = 45_000;
 const SESSION_POLL_MS_DISCONNECTED = 9_000;
 const SESSION_POLL_MS_CONNECTED = 30_000;
+const EVENT_REFRESH_NONE = new Set(['ready', 'heartbeat', 'ping', 'noop']);
+const EVENT_REFRESH_MONITOR_ONLY_TYPES = new Set([
+  'provider',
+  'providers',
+  'mcp',
+  'project',
+  'projects',
+  'config',
+  'path',
+  'vcs',
+  'lsp',
+  'formatter'
+]);
+const EVENT_REFRESH_MONITOR_ONLY_PREFIXES = [
+  'provider.',
+  'providers.',
+  'mcp.',
+  'project.',
+  'projects.',
+  'config.',
+  'path.',
+  'vcs.',
+  'lsp.',
+  'formatter.'
+];
+const EVENT_REFRESH_MONITOR_AND_SESSION_TYPES = new Set([
+  'message',
+  'messages',
+  'session',
+  'sessions',
+  'todo',
+  'diff',
+  'permission',
+  'question',
+  'tool'
+]);
+const EVENT_REFRESH_MONITOR_AND_SESSION_PREFIXES = [
+  'message.',
+  'messages.',
+  'session.',
+  'sessions.',
+  'todo.',
+  'diff.',
+  'permission.',
+  'question.',
+  'tool.',
+  'prompt.',
+  'command.',
+  'shell.'
+];
 
 const SHADOW_DARK =
   '0 0 0 1px rgba(252,251,251,0.16), 0 1px 2px -1px rgba(0,0,0,0.26), 0 1px 2px 0 rgba(0,0,0,0.22), 0 2px 6px 0 rgba(0,0,0,0.18)';
@@ -1499,6 +1550,29 @@ function findSessionId(value: unknown, depth = 0): string | null {
   return null;
 }
 
+function resolveEventRefreshScope(eventType: string): EventRefreshScope {
+  const normalized = eventType.trim().toLowerCase();
+  if (!normalized || EVENT_REFRESH_NONE.has(normalized)) {
+    return 'none';
+  }
+
+  if (
+    EVENT_REFRESH_MONITOR_ONLY_TYPES.has(normalized) ||
+    EVENT_REFRESH_MONITOR_ONLY_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+  ) {
+    return 'monitor';
+  }
+
+  if (
+    EVENT_REFRESH_MONITOR_AND_SESSION_TYPES.has(normalized) ||
+    EVENT_REFRESH_MONITOR_AND_SESSION_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+  ) {
+    return 'monitor-session';
+  }
+
+  return 'monitor-session';
+}
+
 function extractNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim()) {
@@ -1868,12 +1942,18 @@ export default function OpenCodeMonitorPage() {
   }, []);
 
   const scheduleMonitorRefreshFromEvent = useCallback(
-    (payload: unknown) => {
-      if (refreshMonitorTimerRef.current) return;
-      refreshMonitorTimerRef.current = setTimeout(() => {
-        refreshMonitorTimerRef.current = null;
-        void refreshMonitor({ silent: true });
-      }, 550);
+    (eventType: string, payload: unknown) => {
+      const refreshScope = resolveEventRefreshScope(eventType);
+      if (refreshScope === 'none') return;
+
+      if ((refreshScope === 'monitor' || refreshScope === 'monitor-session') && !refreshMonitorTimerRef.current) {
+        refreshMonitorTimerRef.current = setTimeout(() => {
+          refreshMonitorTimerRef.current = null;
+          void refreshMonitor({ silent: true });
+        }, 550);
+      }
+
+      if (refreshScope !== 'monitor-session') return;
 
       const targetSessionId = findSessionId(payload) || activeSessionIdRef.current;
       if (!targetSessionId) return;
@@ -1985,7 +2065,7 @@ export default function OpenCodeMonitorPage() {
           payload: nestedPayload
         });
 
-        scheduleMonitorRefreshFromEvent(nestedPayload);
+        scheduleMonitorRefreshFromEvent(eventType, nestedPayload);
       });
 
       source.addEventListener('source_error', (event) => {
