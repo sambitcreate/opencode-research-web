@@ -24,7 +24,7 @@ Local-first OpenCode control plane for monitoring and executing OpenCode operati
   - file explorer module for find/list/content/status workflows via `/api/opencode/files`,
   - project module for list/current snapshots and `POST /project/current` update actions,
   - worktree module for `/experimental/worktree` list/create/remove/reset operations,
-  - terminal dock module for PTY session list/create/update/remove workflows,
+  - terminal dock module for PTY session list/create/update/remove plus live output/input/resize/reconnect workflows,
   - config editor for `/config` and `/global/config` drafts with diff/confirm apply flow,
   - richer permission/question queue context (session/tool/command/question/options hints),
   - expanded engine status summaries for LSP, formatter, and config/plugin signals,
@@ -92,7 +92,7 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
     - `id`, `query`, `status`, `sessionId`, `answer`, `sources`, `metadata`, `timestamp`
 
 - `GET /api/opencode/status`
-  - Engine/process state snapshot (running, host/port, command, logs, errors).
+  - Engine/process state snapshot (running, host/port, `apiUrl`, command, logs, errors).
 
 - `GET /api/opencode/sessions`
   - Query params:
@@ -195,6 +195,7 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
     - `probe` (upstream response envelope),
     - `feasibility` summary including websocket/upgrade likelihood and proxying constraints in Next route handlers.
   - Note: this route is diagnostic and does not provide live PTY stream passthrough.
+  - Live stream UI uses a direct browser websocket to OpenCode `/pty/:ptyId/connect` with cursor-aware reconnects.
 
 - `GET /api/opencode/files`
   - Mode-based file/find passthrough route.

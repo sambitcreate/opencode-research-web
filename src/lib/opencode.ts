@@ -235,6 +235,7 @@ export type OpenCodeStatus = {
   running: boolean;
   host: string;
   port: number;
+  apiUrl: string;
   lastError: string | null;
   command: string;
   startedAt: string | null;
@@ -1553,12 +1554,14 @@ export async function runResearchQuery(query: string): Promise<{
 export async function getOpenCodeStatus(): Promise<OpenCodeStatus> {
   const host = getHost();
   const port = getPort();
+  const apiUrl = getBaseUrl();
   const manager = getManager();
 
   return {
     running: await isPortOpen(host, port),
     host,
     port,
+    apiUrl,
     lastError: manager.lastError,
     command: manager.command || buildCommandSpec().display,
     startedAt: manager.startedAt ? new Date(manager.startedAt).toISOString() : null,

@@ -140,9 +140,9 @@ Last updated: February 11, 2026
 
 ### UI
 - [x] Add terminal dock with PTY session create/select/remove.
-- [ ] Add live PTY stream connection.
-- [ ] Add PTY input + resize actions.
-- [ ] Add reconnect handling for PTY sessions.
+- [x] Add live PTY stream connection.
+- [x] Add PTY input + resize actions.
+- [x] Add reconnect handling for PTY sessions.
 - [ ] Add command palette parity for keyboard-driven operations.
 
 ## Cross-Cutting Engineering Tasks
@@ -155,8 +155,8 @@ Last updated: February 11, 2026
 
 ## Validation Checklist (Run Per Meaningful Change)
 
-- [ ] `npm run lint`
-- [ ] `npm run build -- --webpack`
+- [x] `npm run lint`
+- [x] `npm run build -- --webpack`
 - [ ] Live smoke: `GET /api/opencode/status`
 - [ ] Live smoke: `GET /api/opencode/sessions`
 - [ ] Live smoke: `GET /api/opencode/monitor`
@@ -179,6 +179,13 @@ Last updated: February 11, 2026
 
 ## Done Log
 
+- [x] 2026-02-12: Completed PTY terminal streaming parity slice in Terminal Dock:
+  - Added direct browser websocket stream connection to OpenCode `/pty/:ptyID/connect` using status-derived `apiUrl` (with host/port fallback)
+  - Added live output panel with cursor tracking and bounded buffer
+  - Added PTY input send/send-line actions over websocket
+  - Added PTY resize action wiring (`size.cols` / `size.rows`) via PTY update endpoint
+  - Added reconnect handling with backoff, auto-connect/auto-reconnect toggles, and reconnect attempt indicators
+  - Added additive status payload field `apiUrl` in `getOpenCodeStatus()` to support env override-safe websocket targeting
 - [x] 2026-02-12: Added typed client backend adapter module (`src/lib/opencode-api-client.ts`) and refactored `src/app/page.tsx` to route API calls through the adapter (no direct component `fetch` calls remain).
 - [x] 2026-02-12: Added an explicit event refresh method-router (`resolveEventRefreshScope`) so SSE `event` envelopes route to monitor-only vs monitor+session refresh paths before state updates/timer scheduling.
 - [x] 2026-02-12: Added dedicated PTY lifecycle API routes:

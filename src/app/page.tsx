@@ -53,6 +53,7 @@ type OpenCodeStatus = {
   running: boolean;
   host: string;
   port: number;
+  apiUrl?: string;
   lastError: string | null;
   command: string;
   startedAt: string | null;
@@ -249,6 +250,7 @@ type OpenCodeControlResponse = {
 };
 
 type EventConnectionState = 'connecting' | 'connected' | 'error';
+type PtyStreamState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 type EventRefreshScope = 'none' | 'monitor' | 'monitor-session';
 
 type OpenCodeDebugEvent = {
@@ -939,6 +941,9 @@ const COMPOSER_ATTACHMENT_MAX_BYTES = 256_000;
 const COMPOSER_TEXT_SNIPPET_LIMIT = 4_000;
 const COMPOSER_IMAGE_DATA_URL_LIMIT = 9_000;
 const COMPOSER_SUGGESTION_LIMIT = 8;
+const PTY_OUTPUT_CHAR_LIMIT = 180_000;
+const PTY_RECONNECT_BASE_MS = 900;
+const PTY_RECONNECT_MAX_MS = 12_000;
 
 const TEXT_ATTACHMENT_EXTENSIONS = new Set([
   'txt',
@@ -1670,6 +1675,88 @@ function extractNumber(value: unknown): number | null {
   return null;
 }
 
+function joinUrlPath(basePath: string, nextPath: string): string {
+  const left = basePath.replace(/\/+$/, '');
+  const right = nextPath.replace(/^\/+/, '');
+  if (!left && !right) return '/';
+  if (!left) return `/${right}`;
+  if (!right) return left;
+  return `${left}/${right}`;
+}
+
+function normalizeSocketHost(host: string): string {
+  const trimmed = host.trim();
+  if (trimmed && trimmed !== '0.0.0.0' && trimmed !== '::' && trimmed !== '[::]') {
+    return trimmed;
+  }
+  if (typeof window !== 'undefined' && window.location.hostname.trim()) {
+    return window.location.hostname;
+  }
+  return '127.0.0.1';
+}
+
+function resolvePtySocketUrl(input: {
+  ptyId: string;
+  cursor: number;
+  apiUrl: string | null;
+  host: string;
+  port: number | null;
+}): string | null {
+  const encodedPtyId = encodeURIComponent(input.ptyId);
+  const cursor = Number.isFinite(input.cursor) ? Math.max(-1, Math.floor(input.cursor)) : 0;
+
+  if (input.apiUrl?.trim()) {
+    try {
+      const parsed = new URL(input.apiUrl);
+      parsed.protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
+      parsed.pathname = joinUrlPath(parsed.pathname, `/pty/${encodedPtyId}/connect`);
+      parsed.search = '';
+      parsed.searchParams.set('cursor', String(cursor));
+      return parsed.toString();
+    } catch {
+      // Fall through to host/port derivation.
+    }
+  }
+
+  if (!input.host || typeof input.port !== 'number' || !Number.isFinite(input.port)) {
+    return null;
+  }
+
+  const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const resolvedHost = normalizeSocketHost(input.host);
+
+  try {
+    const fallback = new URL(`${protocol}//${resolvedHost}:${Math.floor(input.port)}`);
+    fallback.pathname = `/pty/${encodedPtyId}/connect`;
+    fallback.searchParams.set('cursor', String(cursor));
+    return fallback.toString();
+  } catch {
+    return null;
+  }
+}
+
+function decodePtyFrame(buffer: ArrayBuffer): { text: string | null; cursor: number | null } {
+  const bytes = new Uint8Array(buffer);
+  if (bytes.length > 1 && bytes[0] === 0) {
+    try {
+      const raw = new TextDecoder().decode(bytes.slice(1));
+      const parsed = parseEventJson(raw);
+      const record = asRecord(parsed);
+      return {
+        text: null,
+        cursor: extractNumber(record?.cursor)
+      };
+    } catch {
+      return { text: null, cursor: null };
+    }
+  }
+
+  return {
+    text: new TextDecoder().decode(bytes),
+    cursor: null
+  };
+}
+
 function summarizeTodoItems(value: unknown): { total: number; done: number; open: number } {
   const stack: unknown[] = Array.isArray(value) ? value : [value];
   let total = 0;
@@ -1919,6 +2006,17 @@ export default function OpenCodeMonitorPage() {
   const [ptyActionResponse, setPtyActionResponse] = useState<OpenCodePtyRouteResponse | null>(null);
   const [ptyError, setPtyError] = useState<string | null>(null);
   const [isPtyBusy, setIsPtyBusy] = useState(false);
+  const [ptyStreamState, setPtyStreamState] = useState<PtyStreamState>('idle');
+  const [ptyStreamError, setPtyStreamError] = useState<string | null>(null);
+  const [ptyStreamOutput, setPtyStreamOutput] = useState('');
+  const [ptyStreamInput, setPtyStreamInput] = useState('');
+  const [ptyStreamCursor, setPtyStreamCursor] = useState<number | null>(null);
+  const [ptyResizeCols, setPtyResizeCols] = useState('120');
+  const [ptyResizeRows, setPtyResizeRows] = useState('36');
+  const [ptyAutoConnect, setPtyAutoConnect] = useState(true);
+  const [ptyAutoReconnect, setPtyAutoReconnect] = useState(true);
+  const [ptyReconnectAttempt, setPtyReconnectAttempt] = useState(0);
+  const [ptyConnectTick, setPtyConnectTick] = useState(0);
 
   const [configLocalBase, setConfigLocalBase] = useState('{}');
   const [configGlobalBase, setConfigGlobalBase] = useState('{}');
@@ -1946,6 +2044,16 @@ export default function OpenCodeMonitorPage() {
   const refreshSessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const composerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const ptySocketRef = useRef<WebSocket | null>(null);
+  const ptyReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ptyReconnectAttemptRef = useRef(0);
+  const ptyManualCloseSocketRef = useRef<WebSocket | null>(null);
+  const ptyCursorRef = useRef(0);
+  const ptyActiveSessionRef = useRef('');
+  const ptyOutputViewportRef = useRef<HTMLPreElement | null>(null);
+  const selectedPtyIdRef = useRef('');
+  const ptyAutoConnectRef = useRef(ptyAutoConnect);
+  const ptyAutoReconnectRef = useRef(ptyAutoReconnect);
 
   const callControl = useCallback(
     async (input: {
@@ -2112,6 +2220,31 @@ export default function OpenCodeMonitorPage() {
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+
+  useEffect(() => {
+    selectedPtyIdRef.current = selectedPtyId;
+  }, [selectedPtyId]);
+
+  useEffect(() => {
+    ptyAutoConnectRef.current = ptyAutoConnect;
+  }, [ptyAutoConnect]);
+
+  useEffect(() => {
+    ptyAutoReconnectRef.current = ptyAutoReconnect;
+  }, [ptyAutoReconnect]);
+
+  useEffect(() => {
+    if (ptyAutoReconnect) return;
+    if (!ptyReconnectTimerRef.current) return;
+    clearTimeout(ptyReconnectTimerRef.current);
+    ptyReconnectTimerRef.current = null;
+  }, [ptyAutoReconnect]);
+
+  useEffect(() => {
+    const viewport = ptyOutputViewportRef.current;
+    if (!viewport) return;
+    viewport.scrollTop = viewport.scrollHeight;
+  }, [ptyStreamOutput]);
 
   useEffect(() => {
     let disposed = false;
@@ -2661,6 +2794,10 @@ export default function OpenCodeMonitorPage() {
     if (!selectedPtyId) return null;
     return ptySessions.find((session) => session.id === selectedPtyId) ?? null;
   }, [ptySessions, selectedPtyId]);
+
+  const ptyStreamApiUrl = monitor?.status.apiUrl ?? engine?.apiUrl ?? null;
+  const ptyStreamHost = monitor?.status.host || engine?.host || '';
+  const ptyStreamPort = monitor?.status.port ?? engine?.port ?? null;
 
   useEffect(() => {
     if (projectCandidates.length === 0) {
@@ -3886,6 +4023,314 @@ export default function OpenCodeMonitorPage() {
     void refreshPtyList({ silent: true });
   }, [refreshPtyList]);
 
+  const clearPtyReconnectTimer = useCallback(() => {
+    if (!ptyReconnectTimerRef.current) return;
+    clearTimeout(ptyReconnectTimerRef.current);
+    ptyReconnectTimerRef.current = null;
+  }, []);
+
+  const closePtySocket = useCallback(
+    (manual = true) => {
+      clearPtyReconnectTimer();
+      const socket = ptySocketRef.current;
+      ptySocketRef.current = null;
+      if (!socket) return;
+      if (manual) {
+        ptyManualCloseSocketRef.current = socket;
+      }
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close();
+      }
+    },
+    [clearPtyReconnectTimer]
+  );
+
+  const appendPtyOutput = useCallback((chunk: string) => {
+    if (!chunk) return;
+    setPtyStreamOutput((current) => {
+      const next = `${current}${chunk}`;
+      if (next.length <= PTY_OUTPUT_CHAR_LIMIT) return next;
+      return next.slice(next.length - PTY_OUTPUT_CHAR_LIMIT);
+    });
+  }, []);
+
+  const openPtySocket = useCallback(
+    (ptyId: string) => {
+      if (!ptyId.trim()) {
+        setPtyStreamState('idle');
+        setPtyStreamError(null);
+        return;
+      }
+
+      const wsUrl = resolvePtySocketUrl({
+        ptyId,
+        cursor: ptyCursorRef.current,
+        apiUrl: ptyStreamApiUrl,
+        host: ptyStreamHost,
+        port: ptyStreamPort
+      });
+      if (!wsUrl) {
+        setPtyStreamState('error');
+        setPtyStreamError('Unable to resolve PTY websocket URL from engine host/port.');
+        return;
+      }
+
+      closePtySocket(true);
+      setPtyStreamState(ptyReconnectAttemptRef.current > 0 ? 'reconnecting' : 'connecting');
+      if (ptyReconnectAttemptRef.current === 0) {
+        setPtyStreamError(null);
+      }
+
+      let socket: WebSocket;
+      try {
+        socket = new WebSocket(wsUrl);
+      } catch (error) {
+        setPtyStreamState('error');
+        setPtyStreamError(error instanceof Error ? error.message : 'Failed to create PTY websocket.');
+        return;
+      }
+
+      socket.binaryType = 'arraybuffer';
+      ptySocketRef.current = socket;
+      ptyActiveSessionRef.current = ptyId;
+
+      socket.onopen = () => {
+        if (ptySocketRef.current !== socket) return;
+        setPtyStreamState('connected');
+        setPtyStreamError(null);
+        ptyReconnectAttemptRef.current = 0;
+        setPtyReconnectAttempt(0);
+      };
+
+      socket.onmessage = (event) => {
+        void (async () => {
+          if (typeof event.data === 'string') {
+            appendPtyOutput(event.data);
+            return;
+          }
+
+          let payload: ArrayBuffer | null = null;
+          if (event.data instanceof ArrayBuffer) {
+            payload = event.data;
+          } else if (event.data instanceof Blob) {
+            payload = await event.data.arrayBuffer();
+          }
+          if (!payload) return;
+
+          const decoded = decodePtyFrame(payload);
+          if (decoded.text) {
+            appendPtyOutput(decoded.text);
+          }
+          if (decoded.cursor !== null) {
+            ptyCursorRef.current = decoded.cursor;
+            setPtyStreamCursor(decoded.cursor);
+          }
+        })();
+      };
+
+      socket.onerror = () => {
+        if (ptySocketRef.current !== socket) return;
+        setPtyStreamError('PTY stream websocket reported an error.');
+      };
+
+      socket.onclose = () => {
+        if (ptySocketRef.current === socket) {
+          ptySocketRef.current = null;
+        }
+        const wasManualClose = ptyManualCloseSocketRef.current === socket;
+        if (wasManualClose) {
+          ptyManualCloseSocketRef.current = null;
+        }
+
+        if (wasManualClose) {
+          if (!ptyAutoConnectRef.current || selectedPtyIdRef.current !== ptyId) {
+            setPtyStreamState('idle');
+          }
+          return;
+        }
+
+        if (!ptyAutoConnectRef.current || selectedPtyIdRef.current !== ptyId) {
+          setPtyStreamState('idle');
+          return;
+        }
+
+        if (!ptyAutoReconnectRef.current) {
+          setPtyStreamState('error');
+          setPtyStreamError('PTY stream disconnected.');
+          return;
+        }
+
+        const nextAttempt = ptyReconnectAttemptRef.current + 1;
+        ptyReconnectAttemptRef.current = nextAttempt;
+        setPtyReconnectAttempt(nextAttempt);
+
+        const delayMs = Math.min(PTY_RECONNECT_MAX_MS, PTY_RECONNECT_BASE_MS * 2 ** Math.max(0, nextAttempt - 1));
+        setPtyStreamState('reconnecting');
+        setPtyStreamError(`PTY stream disconnected. Reconnecting in ${Math.ceil(delayMs / 1000)}s.`);
+
+        clearPtyReconnectTimer();
+        ptyReconnectTimerRef.current = setTimeout(() => {
+          if (!ptyAutoConnectRef.current || !ptyAutoReconnectRef.current || selectedPtyIdRef.current !== ptyId) {
+            return;
+          }
+          setPtyConnectTick((current) => current + 1);
+        }, delayMs);
+      };
+    },
+    [appendPtyOutput, clearPtyReconnectTimer, closePtySocket, ptyStreamApiUrl, ptyStreamHost, ptyStreamPort]
+  );
+
+  useEffect(() => {
+    if (!ptyAutoConnect) {
+      closePtySocket(true);
+      setPtyStreamState('idle');
+      return;
+    }
+    if (!selectedPtyId) {
+      closePtySocket(true);
+      ptyActiveSessionRef.current = '';
+      ptyCursorRef.current = 0;
+      ptyReconnectAttemptRef.current = 0;
+      setPtyReconnectAttempt(0);
+      setPtyStreamCursor(null);
+      setPtyStreamOutput('');
+      setPtyStreamState('idle');
+      setPtyStreamError(null);
+      return;
+    }
+
+    if (!ptyStreamApiUrl?.trim() && (!ptyStreamHost.trim() || typeof ptyStreamPort !== 'number')) {
+      setPtyStreamState('error');
+      setPtyStreamError('OpenCode websocket endpoint unavailable. Refresh status/monitor and try again.');
+      return;
+    }
+
+    const changedSession = ptyActiveSessionRef.current !== selectedPtyId;
+    if (changedSession) {
+      closePtySocket(true);
+      ptyActiveSessionRef.current = selectedPtyId;
+      ptyCursorRef.current = 0;
+      ptyReconnectAttemptRef.current = 0;
+      setPtyReconnectAttempt(0);
+      setPtyStreamCursor(null);
+      setPtyStreamOutput('');
+      setPtyConnectTick((current) => current + 1);
+      return;
+    }
+
+    const socket = ptySocketRef.current;
+    const connected = !!socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING);
+    if (!connected) {
+      setPtyConnectTick((current) => current + 1);
+    }
+  }, [closePtySocket, ptyAutoConnect, ptyStreamApiUrl, ptyStreamHost, ptyStreamPort, selectedPtyId]);
+
+  useEffect(() => {
+    if (ptyConnectTick <= 0) return;
+    if (!ptyAutoConnect) return;
+    if (!selectedPtyId) return;
+    const socket = ptySocketRef.current;
+    const connectedToSelection =
+      ptyActiveSessionRef.current === selectedPtyId &&
+      !!socket &&
+      (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING);
+    if (connectedToSelection) return;
+    openPtySocket(selectedPtyId);
+  }, [openPtySocket, ptyAutoConnect, ptyConnectTick, selectedPtyId]);
+
+  useEffect(() => {
+    return () => {
+      closePtySocket(true);
+    };
+  }, [closePtySocket]);
+
+  const handleConnectPtyStream = useCallback(() => {
+    if (!selectedPtyId.trim()) {
+      setPtyStreamError('Select a PTY session before connecting.');
+      return;
+    }
+    setPtyAutoConnect(true);
+    setPtyStreamError(null);
+    setPtyConnectTick((current) => current + 1);
+  }, [selectedPtyId]);
+
+  const handleDisconnectPtyStream = useCallback(() => {
+    setPtyAutoConnect(false);
+    closePtySocket(true);
+    ptyReconnectAttemptRef.current = 0;
+    setPtyReconnectAttempt(0);
+    setPtyStreamState('idle');
+    setPtyStreamError(null);
+  }, [closePtySocket]);
+
+  const handleClearPtyOutput = useCallback(() => {
+    setPtyStreamOutput('');
+  }, []);
+
+  const handleSendPtyInput = useCallback(
+    (appendNewline: boolean) => {
+      const socket = ptySocketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        setPtyStreamError('PTY stream is not connected.');
+        return;
+      }
+
+      const payload = appendNewline ? `${ptyStreamInput}\n` : ptyStreamInput;
+      if (!payload) return;
+
+      socket.send(payload);
+      setPtyStreamError(null);
+      setPtyStreamInput('');
+    },
+    [ptyStreamInput]
+  );
+
+  const handleResizePty = useCallback(async () => {
+    if (!selectedPtyId.trim()) {
+      setPtyError('Select a PTY session before resizing.');
+      return;
+    }
+    if (runtimeControlsLocked) {
+      setPtyError('Another operation is in flight. Try again shortly.');
+      return;
+    }
+
+    const cols = Number.parseInt(ptyResizeCols.trim(), 10);
+    const rows = Number.parseInt(ptyResizeRows.trim(), 10);
+    if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) {
+      setPtyError('Resize requires positive integer values for cols and rows.');
+      return;
+    }
+
+    setIsPtyBusy(true);
+    setPtyError(null);
+    setEngineState('booting');
+    try {
+      const payload = await updateOpenCodePty(
+        selectedPtyId,
+        {
+          size: {
+            cols,
+            rows
+          }
+        },
+        { autostart: true }
+      );
+      setPtyActionResponse(payload);
+      if (!payload.result.ok) {
+        throw new Error(payload.result.text || `Resize PTY failed (${payload.result.status}).`);
+      }
+      setEngineState('ready');
+      await refreshPtyList({ silent: true });
+      await refreshMonitor({ silent: true });
+    } catch (error) {
+      setPtyError(error instanceof Error ? error.message : 'Resize PTY failed.');
+      setEngineState('error');
+    } finally {
+      setIsPtyBusy(false);
+    }
+  }, [ptyResizeCols, ptyResizeRows, refreshMonitor, refreshPtyList, runtimeControlsLocked, selectedPtyId]);
+
   const handleCreatePty = useCallback(async () => {
     if (runtimeControlsLocked) {
       setPtyError('Another operation is in flight. Try again shortly.');
@@ -3982,6 +4427,11 @@ export default function OpenCodeMonitorPage() {
     }
 
     const targetPtyId = selectedPtyId;
+    if (targetPtyId === selectedPtyIdRef.current) {
+      closePtySocket(true);
+      setPtyStreamState('idle');
+      setPtyStreamError(null);
+    }
     setIsPtyBusy(true);
     setPtyError(null);
     setEngineState('booting');
@@ -4000,7 +4450,7 @@ export default function OpenCodeMonitorPage() {
     } finally {
       setIsPtyBusy(false);
     }
-  }, [refreshMonitor, refreshPtyList, runtimeControlsLocked, selectedPtyId]);
+  }, [closePtySocket, refreshMonitor, refreshPtyList, runtimeControlsLocked, selectedPtyId]);
 
   const refreshConfigEditor = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -4895,12 +5345,15 @@ export default function OpenCodeMonitorPage() {
                     refresh
                   </Button>
                 </div>
-                <CardDescription>PTY session create/select/remove controls (streaming input/output follows in next phase).</CardDescription>
+                <CardDescription>PTY lifecycle controls with live stream, input, resize, and reconnect handling.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="flex flex-wrap gap-1.5">
                   <Badge>{ptySessions.length} pty sessions</Badge>
                   {selectedPtySession ? <Badge>{selectedPtySession.status}</Badge> : <Badge>no selection</Badge>}
+                  <Badge>stream: {ptyStreamState}</Badge>
+                  {ptyStreamCursor !== null && <Badge>cursor {ptyStreamCursor}</Badge>}
+                  {ptyReconnectAttempt > 0 && <Badge>retry {ptyReconnectAttempt}</Badge>}
                 </div>
 
                 <select
@@ -4929,6 +5382,109 @@ export default function OpenCodeMonitorPage() {
                     </p>
                   </div>
                 )}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={!selectedPtyId || (ptyStreamState === 'connecting' || ptyStreamState === 'reconnecting')}
+                    onClick={handleConnectPtyStream}
+                  >
+                    connect stream
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={ptyStreamState === 'idle'}
+                    onClick={handleDisconnectPtyStream}
+                  >
+                    disconnect stream
+                  </Button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] px-3 py-2 text-[11px]">
+                  <label className="flex items-center gap-1.5 text-[var(--text-base)]">
+                    <input
+                      type="checkbox"
+                      checked={ptyAutoConnect}
+                      onChange={(event) => setPtyAutoConnect(event.target.checked)}
+                    />
+                    auto connect
+                  </label>
+                  <label className="flex items-center gap-1.5 text-[var(--text-base)]">
+                    <input
+                      type="checkbox"
+                      checked={ptyAutoReconnect}
+                      onChange={(event) => setPtyAutoReconnect(event.target.checked)}
+                    />
+                    auto reconnect
+                  </label>
+                  <Button size="sm" variant="secondary" onClick={handleClearPtyOutput}>
+                    clear output
+                  </Button>
+                </div>
+
+                <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                  <p className="oc-kicker">Live PTY Output</p>
+                  <pre
+                    ref={ptyOutputViewportRef}
+                    className="oc-scroll oc-mono mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]"
+                  >
+                    {ptyStreamOutput || '(waiting for stream output)'}
+                  </pre>
+                </div>
+
+                <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
+                  <Input
+                    value={ptyStreamInput}
+                    onChange={(event) => setPtyStreamInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter') return;
+                      event.preventDefault();
+                      handleSendPtyInput(true);
+                    }}
+                    placeholder="Type PTY input"
+                  />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={ptyStreamState !== 'connected'}
+                    onClick={() => handleSendPtyInput(false)}
+                  >
+                    send
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={ptyStreamState !== 'connected'}
+                    onClick={() => handleSendPtyInput(true)}
+                  >
+                    send line
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <Input
+                    value={ptyResizeCols}
+                    onChange={(event) => setPtyResizeCols(event.target.value)}
+                    placeholder="cols"
+                    className="oc-mono text-[11px]"
+                  />
+                  <Input
+                    value={ptyResizeRows}
+                    onChange={(event) => setPtyResizeRows(event.target.value)}
+                    placeholder="rows"
+                    className="oc-mono text-[11px]"
+                  />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={!selectedPtyId || isPtyBusy || runtimeControlsLocked}
+                    onClick={() => void handleResizePty()}
+                  >
+                    resize
+                  </Button>
+                </div>
 
                 <Textarea
                   value={ptyCreateBody}
@@ -4970,6 +5526,12 @@ export default function OpenCodeMonitorPage() {
                 {ptyError && (
                   <div className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-2.5 text-[12px] text-[var(--critical)]">
                     {ptyError}
+                  </div>
+                )}
+
+                {ptyStreamError && (
+                  <div className="rounded-lg border border-[var(--warning-border)] bg-[var(--warning-soft)] p-2.5 text-[12px] text-[var(--warning)]">
+                    {ptyStreamError}
                   </div>
                 )}
 
