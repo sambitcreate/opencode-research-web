@@ -1848,6 +1848,27 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
     });
   }, [activeSessionId, runSessionQuickAction]);
 
+  const handleArchiveSession = useCallback(async () => {
+    if (!activeSessionId) return;
+    const confirmed = window.confirm('Archive this session? It will be hidden from active session lists.');
+    if (!confirmed) return;
+
+    await runSessionQuickAction({
+      label: 'Archive session',
+      method: 'PATCH',
+      path: `/session/${encodeURIComponent(activeSessionId)}`,
+      body: {
+        time: {
+          archived: Date.now()
+        }
+      },
+      clearActiveSession: true,
+      onSuccess: () => {
+        setSessionShareUrl(null);
+      }
+    });
+  }, [activeSessionId, runSessionQuickAction]);
+
   const handleCopyShareLink = useCallback(async () => {
     if (!sessionShareUrl) return;
     try {
@@ -4823,6 +4844,15 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
                               </Button>
                               <Button size="sm" variant="secondary" disabled={isOperationRunning} onClick={() => void handleUnshareSession()}>
                                 unshare
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                disabled={isOperationRunning}
+                                className="text-[var(--warning)] hover:text-[var(--warning)]"
+                                onClick={() => void handleArchiveSession()}
+                              >
+                                archive
                               </Button>
                               <Button
                                 size="sm"
