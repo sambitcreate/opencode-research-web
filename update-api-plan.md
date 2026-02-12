@@ -135,7 +135,7 @@ Last updated: February 11, 2026
 ## P3 (Could) - PTY Terminal + Command Palette
 
 ### API
-- [ ] Expose PTY lifecycle over HTTP (`list/create/update/delete`) as short-term baseline.
+- [x] Expose PTY lifecycle over HTTP (`list/create/update/delete`) as short-term baseline.
 - [ ] Run implementation spike for PTY websocket proxy feasibility in Next runtime.
 
 ### UI
@@ -181,6 +181,10 @@ Last updated: February 11, 2026
 
 - [x] 2026-02-12: Added typed client backend adapter module (`src/lib/opencode-api-client.ts`) and refactored `src/app/page.tsx` to route API calls through the adapter (no direct component `fetch` calls remain).
 - [x] 2026-02-12: Added an explicit event refresh method-router (`resolveEventRefreshScope`) so SSE `event` envelopes route to monitor-only vs monitor+session refresh paths before state updates/timer scheduling.
+- [x] 2026-02-12: Added dedicated PTY lifecycle API routes:
+  - `GET|POST /api/opencode/pty` for list/create
+  - `PATCH|DELETE /api/opencode/pty/:ptyId` for update/delete
+  - Updated README route docs and key-files list for PTY baseline coverage
 - [x] 2026-02-11: Converted this document from narrative plan to checklist-style tracker.
 - [x] 2026-02-11: Completed initial P0 API backend slice:
   - `/api/opencode/events` SSE bridge (`scope`, `autostart`, source-tagged normalized events with `seq`)

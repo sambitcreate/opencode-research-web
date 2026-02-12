@@ -165,6 +165,24 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
     - success: `{ ok, target, action, request, result }`
     - validation/resolution errors: `{ ok: false, error: { code, message, details } }`
 
+- `GET|POST /api/opencode/pty`
+  - PTY lifecycle baseline route for list/create operations.
+  - Query params:
+    - `autostart=1|true` optional
+  - `GET` returns PTY list via OpenCode `/pty`.
+  - `POST` accepts optional JSON body and creates PTY via OpenCode `/pty`.
+  - Output:
+    - `{ request, result }` where `result` is `{ ok, status, contentType, data, text }`
+
+- `PATCH|DELETE /api/opencode/pty/:ptyId`
+  - PTY lifecycle baseline route for update/delete operations.
+  - Query params:
+    - `autostart=1|true` optional
+  - `PATCH` accepts optional JSON body and forwards to OpenCode `/pty/:ptyId`.
+  - `DELETE` forwards to OpenCode `/pty/:ptyId`.
+  - Output:
+    - `{ request, result }` where `result` is `{ ok, status, contentType, data, text }`
+
 - `GET /api/opencode/files`
   - Mode-based file/find passthrough route.
   - Query params:
@@ -264,6 +282,8 @@ Optional live smoke test:
 - `src/app/api/opencode/files/route.ts` mode-based file/find passthrough route
 - `src/app/api/opencode/system/route.ts` aggregate system/config/project route
 - `src/app/api/opencode/openapi/route.ts` OpenAPI snapshot route
+- `src/app/api/opencode/pty/route.ts` PTY lifecycle list/create route
+- `src/app/api/opencode/pty/[ptyId]/route.ts` PTY lifecycle update/delete route
 - `src/app/api/opencode/sessions/route.ts` session list/detail route
 - `src/app/api/opencode/status/route.ts` engine status route
 - `src/app/api/query/route.ts` legacy research query route
