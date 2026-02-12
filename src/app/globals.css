@@ -1,55 +1,68 @@
 @import "tailwindcss";
 
 :root {
-  --background: #111111;
-  --background-weak: #1a1a1a;
-  --background-stronger: #0a0a0a;
-  --surface-base: #1a1a1a;
-  --surface-raised: #222222;
-  --surface-hover: #2a2a2a;
-  --surface-inset: #151515;
-  --border-base: #333333;
-  --border-weak: #262626;
-  --border-selected: #3f82ff;
+  /* Core backgrounds - true black base */
+  --background: #000000;
+  --background-weak: #0a0a0a;
+  --background-stronger: #000000;
+  --surface-base: #0a0a0a;
+  --surface-raised: #111111;
+  --surface-hover: #1a1a1a;
+  --surface-inset: #050505;
 
-  --text-base: #e0e0e0;
-  --text-weak: #a0a0a0;
-  --text-weaker: #666666;
+  /* Borders - sharp 1px divisions */
+  --border-base: #222222;
+  --border-weak: #1a1a1a;
+  --border-strong: #2a2a2a;
+  --border-selected: #0066FF;
+
+  /* Text - maximum contrast */
+  --text-base: #f5f5f5;
+  --text-weak: #888888;
+  --text-weaker: #555555;
   --text-strong: #ffffff;
   --text-inverse: #000000;
 
+  /* Buttons - inverted for primary, subtle for secondary */
   --button-primary: #ffffff;
-  --button-primary-hover: #e0e0e0;
+  --button-primary-hover: #f0f0f0;
   --button-primary-foreground: #000000;
-  --button-secondary: #2a2a2a;
-  --button-secondary-hover: #333333;
-  --input-bg: #151515;
+  --button-secondary: #1a1a1a;
+  --button-secondary-hover: #222222;
+  --input-bg: #0a0a0a;
 
-  --accent: #3f82ff;
-  --accent-soft: #1a2a44;
-  --success: #2ea043;
-  --success-soft: #1a2e20;
-  --success-border: #2ea043;
-  --warning: #f1c40f;
-  --warning-soft: #332b00;
-  --warning-border: #f1c40f;
-  --critical: #ff5252;
-  --critical-soft: #3a1515;
-  --critical-border: #ff5252;
-  --info: #3f82ff;
+  /* Accent - electric blue, single focal color */
+  --accent: #0066FF;
+  --accent-hover: #0052CC;
+  --accent-soft: #001133;
 
-  --shadow-xs-border: 0 0 0 1px var(--border-base), 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+  /* Status colors - high contrast */
+  --success: #00FF41;
+  --success-soft: #001a0d;
+  --success-border: #00FF41;
+  --warning: #FFD700;
+  --warning-soft: #1a1500;
+  --warning-border: #FFD700;
+  --critical: #FF0055;
+  --critical-soft: #1a0008;
+  --critical-border: #FF0055;
+  --info: #0066FF;
+
+  /* Shadows - sharp, minimal */
+  --shadow-hard: 0 0 0 1px var(--border-base);
+  --shadow-elevated: 0 0 0 1px var(--border-base), 0 2px 0 0 rgba(0, 0, 0, 0.8);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--text-base);
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", monospace;
+  --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "JetBrains Mono", "SF Mono", "Consolas", monospace;
+  --radius: 2px;
 }
 
 * {
-  border-color: var(--border-weak);
+  border-color: var(--border-base);
 }
 
 html,
@@ -62,40 +75,59 @@ body {
   background: var(--background);
   color: var(--text-base);
   font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em;
 }
 
 .oc-app {
   position: relative;
   isolation: isolate;
   background: var(--background);
-  /* Ensure solid background */
 }
-
-/* Removed transparent gradient overlay (::before) */
-/* Removed noise texture (::after) for cleaner look */
 
 .oc-panel {
   border: 1px solid var(--border-base);
   background: var(--surface-raised);
-  /* Solid background */
-  box-shadow: var(--shadow-xs-border);
-  /* Removed backdrop-filter */
+  box-shadow: var(--shadow-hard);
 }
-
-/* Removed .oc-header-glow completely */
 
 .oc-kicker {
   color: var(--text-weak);
-  letter-spacing: 0.14em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
+  font-family: var(--font-mono);
 }
 
 .oc-mono {
-  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", monospace;
+  font-family: var(--font-mono);
+  letter-spacing: -0.02em;
+}
+
+/* Technical precision utilities */
+.oc-border-sharp {
+  border: 1px solid var(--border-base);
+  border-radius: 2px;
+}
+
+.oc-grid-line {
+  position: relative;
+}
+
+.oc-grid-line::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--border-weak);
+  opacity: 0.5;
 }
 
 .oc-scroll {
@@ -104,17 +136,94 @@ body {
 }
 
 .oc-scroll::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
+}
+
+.oc-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .oc-scroll::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--text-weak) 34%, transparent);
-  border-radius: 999px;
+  background: var(--border-strong);
+  border-radius: 0;
+  border: 1px solid var(--border-base);
 }
 
-/* Removed .oc-scan and @keyframes oc-scan to eliminate gradient animation */
+.oc-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--border-selected);
+}
+
+/* Status indicators with technical precision */
+.oc-status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 0;
+  border: 1px solid currentColor;
+}
+
+.oc-status-running {
+  background: var(--success);
+  border-color: var(--success);
+  box-shadow: 0 0 0 2px var(--success-soft);
+}
+
+.oc-status-error {
+  background: var(--critical);
+  border-color: var(--critical);
+  box-shadow: 0 0 0 2px var(--critical-soft);
+}
+
+.oc-status-idle {
+  background: transparent;
+  border-color: var(--text-weak);
+}
+
+/* Accent highlight utility */
+.oc-highlight {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Technical grid background (subtle) */
+.oc-grid-bg {
+  background-image:
+    linear-gradient(var(--border-weak) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-weak) 1px, transparent 1px);
+  background-size: 20px 20px;
+  background-position: -1px -1px;
+}
+
+/* Code block styling */
+.oc-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-base);
+  border-radius: 2px;
+  padding: 2px 6px;
+  color: var(--text-base);
+}
+
+/* Hover lift effect for interactive cards */
+.oc-interactive {
+  transition: none;
+  cursor: pointer;
+}
+
+.oc-interactive:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-elevated);
+}
+
+.oc-interactive:active {
+  transform: translateY(1px);
+}
 
 @media (max-width: 768px) {
-  /* Removed .oc-app::after override since ::after is gone */
+  .oc-scroll::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
 }
