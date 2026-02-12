@@ -36,12 +36,16 @@ import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
 import {
   callOpenCodeControl,
+  createOpenCodePty,
+  deleteOpenCodePty,
   fetchOpenCodeFiles,
   fetchOpenCodeMonitorSnapshot,
+  fetchOpenCodePtyList,
   fetchOpenCodeSessionDetail,
   fetchOpenCodeSessionTimeline,
   fetchOpenCodeSessionTranscript,
-  fetchOpenCodeSystemSnapshot
+  fetchOpenCodeSystemSnapshot,
+  updateOpenCodePty
 } from '@/lib/opencode-api-client';
 import { cn } from '@/lib/utils';
 
@@ -171,6 +175,25 @@ type OpenCodeSystemSnapshotResponse = {
   include: string[];
   sections: Record<string, OpenCodeControlResponse>;
   errors: string[];
+};
+
+type OpenCodePtyRouteResponse = {
+  request: {
+    path: string;
+    method: string;
+    body?: unknown;
+  };
+  result: OpenCodeControlResponse;
+};
+
+type OpenCodePtySession = {
+  id: string;
+  title: string;
+  command: string;
+  args: string[];
+  cwd: string;
+  status: string;
+  pid: number | null;
 };
 
 type OpenCodeMonitorSnapshot = {
@@ -337,6 +360,7 @@ const EVENT_REFRESH_NONE = new Set(['ready', 'heartbeat', 'ping', 'noop']);
 const EVENT_REFRESH_MONITOR_ONLY_TYPES = new Set([
   'provider',
   'providers',
+  'pty',
   'mcp',
   'project',
   'projects',
@@ -349,6 +373,7 @@ const EVENT_REFRESH_MONITOR_ONLY_TYPES = new Set([
 const EVENT_REFRESH_MONITOR_ONLY_PREFIXES = [
   'provider.',
   'providers.',
+  'pty.',
   'mcp.',
   'project.',
   'projects.',
@@ -1525,6 +1550,48 @@ function extractMcpServers(value: unknown): McpServerOption[] {
   return Array.from(map.values()).sort((left, right) => left.label.localeCompare(right.label));
 }
 
+function extractPtySessions(value: unknown): OpenCodePtySession[] {
+  const rootArray = Array.isArray(value)
+    ? value
+    : Array.isArray(asRecord(value)?.items)
+      ? (asRecord(value)?.items as unknown[])
+      : Array.isArray(asRecord(value)?.data)
+        ? (asRecord(value)?.data as unknown[])
+        : [];
+
+  const sessions: OpenCodePtySession[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of rootArray) {
+    const record = asRecord(entry);
+    if (!record) continue;
+
+    const id = extractString(record, ['id', 'ptyID', 'ptyId']);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+
+    const title = extractString(record, ['title', 'name']) ?? id;
+    const command = extractString(record, ['command']) ?? '';
+    const cwd = extractString(record, ['cwd', 'directory']) ?? '';
+    const status = extractString(record, ['status', 'state']) ?? 'unknown';
+    const args = toStringList(record.args);
+    const pid = extractNumber(record.pid);
+
+    sessions.push({
+      id,
+      title,
+      command,
+      args,
+      cwd,
+      status,
+      pid
+    });
+  }
+
+  sessions.sort((left, right) => left.title.localeCompare(right.title));
+  return sessions;
+}
+
 function parseEventJson(value: string): unknown {
   try {
     return JSON.parse(value) as unknown;
@@ -1823,6 +1890,14 @@ export default function OpenCodeMonitorPage() {
   const [worktreeActionResult, setWorktreeActionResult] = useState<OpenCodeControlResponse | null>(null);
   const [worktreeError, setWorktreeError] = useState<string | null>(null);
   const [isWorktreeBusy, setIsWorktreeBusy] = useState(false);
+
+  const [ptyCreateBody, setPtyCreateBody] = useState('{\n  "title": "Local Shell",\n  "command": "zsh",\n  "args": []\n}');
+  const [ptyUpdateBody, setPtyUpdateBody] = useState('{\n  "title": "Renamed PTY"\n}');
+  const [selectedPtyId, setSelectedPtyId] = useState('');
+  const [ptyListResponse, setPtyListResponse] = useState<OpenCodePtyRouteResponse | null>(null);
+  const [ptyActionResponse, setPtyActionResponse] = useState<OpenCodePtyRouteResponse | null>(null);
+  const [ptyError, setPtyError] = useState<string | null>(null);
+  const [isPtyBusy, setIsPtyBusy] = useState(false);
 
   const [configLocalBase, setConfigLocalBase] = useState('{}');
   const [configGlobalBase, setConfigGlobalBase] = useState('{}');
@@ -2519,6 +2594,15 @@ export default function OpenCodeMonitorPage() {
     );
   }, [projectCurrentSection?.data, projectListSection?.data]);
 
+  const ptySessions = useMemo(() => {
+    return extractPtySessions(ptyListResponse?.result?.data);
+  }, [ptyListResponse?.result?.data]);
+
+  const selectedPtySession = useMemo(() => {
+    if (!selectedPtyId) return null;
+    return ptySessions.find((session) => session.id === selectedPtyId) ?? null;
+  }, [ptySessions, selectedPtyId]);
+
   useEffect(() => {
     if (projectCandidates.length === 0) {
       if (selectedProjectCandidate) setSelectedProjectCandidate('');
@@ -2527,6 +2611,15 @@ export default function OpenCodeMonitorPage() {
     if (projectCandidates.includes(selectedProjectCandidate)) return;
     setSelectedProjectCandidate(projectCandidates[0]);
   }, [projectCandidates, selectedProjectCandidate]);
+
+  useEffect(() => {
+    if (ptySessions.length === 0) {
+      if (selectedPtyId) setSelectedPtyId('');
+      return;
+    }
+    if (ptySessions.some((session) => session.id === selectedPtyId)) return;
+    setSelectedPtyId(ptySessions[0].id);
+  }, [ptySessions, selectedPtyId]);
 
   useEffect(() => {
     if (!selectedApiMethods.includes(apiMethod)) {
@@ -3709,6 +3802,147 @@ export default function OpenCodeMonitorPage() {
     }
   }, [refreshWorktreeList, runWorktreeControl, worktreeResetBody]);
 
+  const refreshPtyList = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!options?.silent) {
+        setIsPtyBusy(true);
+      }
+      setPtyError(null);
+
+      try {
+        const payload = await fetchOpenCodePtyList({ autostart: true });
+        setPtyListResponse(payload);
+      } catch (error) {
+        setPtyError(error instanceof Error ? error.message : 'Failed to load PTY sessions.');
+      } finally {
+        if (!options?.silent) {
+          setIsPtyBusy(false);
+        }
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    void refreshPtyList({ silent: true });
+  }, [refreshPtyList]);
+
+  const handleCreatePty = useCallback(async () => {
+    if (runtimeControlsLocked) {
+      setPtyError('Another operation is in flight. Try again shortly.');
+      return;
+    }
+
+    let body: unknown = {};
+    const trimmed = ptyCreateBody.trim();
+    if (trimmed) {
+      try {
+        body = JSON.parse(trimmed) as unknown;
+      } catch {
+        setPtyError('Create PTY payload must be valid JSON.');
+        return;
+      }
+    }
+
+    setIsPtyBusy(true);
+    setPtyError(null);
+    setEngineState('booting');
+    try {
+      const payload = await createOpenCodePty(body, { autostart: true });
+      setPtyActionResponse(payload);
+      if (!payload.result.ok) {
+        throw new Error(payload.result.text || `Create PTY failed (${payload.result.status}).`);
+      }
+
+      setEngineState('ready');
+      await refreshPtyList({ silent: true });
+      await refreshMonitor({ silent: true });
+
+      const created = asRecord(payload.result.data);
+      const createdId = created ? extractString(created, ['id', 'ptyID', 'ptyId']) : null;
+      if (createdId) {
+        setSelectedPtyId(createdId);
+      }
+    } catch (error) {
+      setPtyError(error instanceof Error ? error.message : 'Create PTY failed.');
+      setEngineState('error');
+    } finally {
+      setIsPtyBusy(false);
+    }
+  }, [ptyCreateBody, refreshMonitor, refreshPtyList, runtimeControlsLocked]);
+
+  const handleUpdatePty = useCallback(async () => {
+    if (!selectedPtyId.trim()) {
+      setPtyError('Select a PTY session before updating.');
+      return;
+    }
+    if (runtimeControlsLocked) {
+      setPtyError('Another operation is in flight. Try again shortly.');
+      return;
+    }
+
+    let body: unknown = {};
+    const trimmed = ptyUpdateBody.trim();
+    if (trimmed) {
+      try {
+        body = JSON.parse(trimmed) as unknown;
+      } catch {
+        setPtyError('Update PTY payload must be valid JSON.');
+        return;
+      }
+    }
+
+    setIsPtyBusy(true);
+    setPtyError(null);
+    setEngineState('booting');
+    try {
+      const payload = await updateOpenCodePty(selectedPtyId, body, { autostart: true });
+      setPtyActionResponse(payload);
+      if (!payload.result.ok) {
+        throw new Error(payload.result.text || `Update PTY failed (${payload.result.status}).`);
+      }
+      setEngineState('ready');
+      await refreshPtyList({ silent: true });
+      await refreshMonitor({ silent: true });
+    } catch (error) {
+      setPtyError(error instanceof Error ? error.message : 'Update PTY failed.');
+      setEngineState('error');
+    } finally {
+      setIsPtyBusy(false);
+    }
+  }, [ptyUpdateBody, refreshMonitor, refreshPtyList, runtimeControlsLocked, selectedPtyId]);
+
+  const handleDeletePty = useCallback(async () => {
+    if (!selectedPtyId.trim()) {
+      setPtyError('Select a PTY session before deleting.');
+      return;
+    }
+    if (runtimeControlsLocked) {
+      setPtyError('Another operation is in flight. Try again shortly.');
+      return;
+    }
+
+    const targetPtyId = selectedPtyId;
+    setIsPtyBusy(true);
+    setPtyError(null);
+    setEngineState('booting');
+    try {
+      const payload = await deleteOpenCodePty(targetPtyId, { autostart: true });
+      setPtyActionResponse(payload);
+      if (!payload.result.ok) {
+        throw new Error(payload.result.text || `Delete PTY failed (${payload.result.status}).`);
+      }
+      setEngineState('ready');
+      await refreshPtyList({ silent: true });
+      await refreshMonitor({ silent: true });
+    } catch (error) {
+      setPtyError(error instanceof Error ? error.message : 'Delete PTY failed.');
+      setEngineState('error');
+    } finally {
+      setIsPtyBusy(false);
+    }
+  }, [refreshMonitor, refreshPtyList, runtimeControlsLocked, selectedPtyId]);
+
   const refreshConfigEditor = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
       setIsConfigBusy(true);
@@ -4564,6 +4798,112 @@ export default function OpenCodeMonitorPage() {
                   </summary>
                   <pre className="oc-scroll oc-mono mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
                     {prettyJson(projectCurrentSection?.data ?? null)}
+                  </pre>
+                </details>
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader>
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <TerminalSquare className="h-4 w-4 text-[var(--accent)]" />
+                    Terminal Dock
+                  </CardTitle>
+                  <Button size="sm" variant="secondary" disabled={isPtyBusy} onClick={() => void refreshPtyList()}>
+                    <RefreshCw className={cn('h-3.5 w-3.5', isPtyBusy && 'animate-spin')} />
+                    refresh
+                  </Button>
+                </div>
+                <CardDescription>PTY session create/select/remove controls (streaming input/output follows in next phase).</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex flex-wrap gap-1.5">
+                  <Badge>{ptySessions.length} pty sessions</Badge>
+                  {selectedPtySession ? <Badge>{selectedPtySession.status}</Badge> : <Badge>no selection</Badge>}
+                </div>
+
+                <select
+                  value={selectedPtyId}
+                  onChange={(event) => setSelectedPtyId(event.target.value)}
+                  className="h-9 w-full rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                >
+                  {ptySessions.length === 0 && <option value="">no PTY sessions</option>}
+                  {ptySessions.map((session) => (
+                    <option key={session.id} value={session.id}>
+                      {session.title} ({session.id})
+                    </option>
+                  ))}
+                </select>
+
+                {selectedPtySession && (
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3 text-[11px]">
+                    <p className="oc-kicker">Selected PTY</p>
+                    <p className="oc-mono mt-1 text-[var(--text-strong)]">
+                      {selectedPtySession.command}
+                      {selectedPtySession.args.length > 0 ? ` ${selectedPtySession.args.join(' ')}` : ''}
+                    </p>
+                    <p className="oc-mono text-[var(--text-weaker)]">{selectedPtySession.cwd || 'cwd unavailable'}</p>
+                    <p className="text-[var(--text-weaker)]">
+                      {selectedPtySession.pid !== null ? `pid ${selectedPtySession.pid}` : 'pid unknown'}
+                    </p>
+                  </div>
+                )}
+
+                <Textarea
+                  value={ptyCreateBody}
+                  onChange={(event) => setPtyCreateBody(event.target.value)}
+                  className="oc-mono h-24 resize-none text-[11px]"
+                  placeholder='Create PTY payload JSON (example: {"title":"Local Shell","command":"zsh","args":[]})'
+                />
+
+                <Button size="sm" variant="secondary" disabled={isPtyBusy || runtimeControlsLocked} onClick={() => void handleCreatePty()}>
+                  create pty
+                </Button>
+
+                <Textarea
+                  value={ptyUpdateBody}
+                  onChange={(event) => setPtyUpdateBody(event.target.value)}
+                  className="oc-mono h-20 resize-none text-[11px]"
+                  placeholder='Update PTY payload JSON (example: {"title":"Renamed PTY"})'
+                />
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={!selectedPtyId || isPtyBusy || runtimeControlsLocked}
+                    onClick={() => void handleUpdatePty()}
+                  >
+                    update
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={!selectedPtyId || isPtyBusy || runtimeControlsLocked}
+                    onClick={() => void handleDeletePty()}
+                  >
+                    remove
+                  </Button>
+                </div>
+
+                {ptyError && (
+                  <div className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-2.5 text-[12px] text-[var(--critical)]">
+                    {ptyError}
+                  </div>
+                )}
+
+                <details className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                  <summary className="cursor-pointer text-[12px] font-medium text-[var(--text-strong)]">PTY list response</summary>
+                  <pre className="oc-scroll oc-mono mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                    {prettyJson(ptyListResponse?.result?.data ?? null)}
+                  </pre>
+                </details>
+
+                <details className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                  <summary className="cursor-pointer text-[12px] font-medium text-[var(--text-strong)]">last PTY action</summary>
+                  <pre className="oc-scroll oc-mono mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                    {prettyJson(ptyActionResponse?.result?.data ?? null)}
                   </pre>
                 </details>
               </CardContent>

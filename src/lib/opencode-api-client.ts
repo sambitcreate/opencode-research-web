@@ -49,6 +49,15 @@ type SystemSnapshotOptions = {
   autostart?: boolean;
 };
 
+export type OpenCodePtyRouteResponse = {
+  request: {
+    path: string;
+    method: OpenCodeHttpMethod | string;
+    body?: unknown;
+  };
+  result: OpenCodeControlResponse;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -217,5 +226,64 @@ export async function fetchOpenCodeSystemSnapshot<T>(options?: SystemSnapshotOpt
       autostart: options?.autostart
     },
     fallbackError: 'Failed to load system snapshot.'
+  });
+}
+
+export async function fetchOpenCodePtyList(options?: { autostart?: boolean }): Promise<OpenCodePtyRouteResponse> {
+  return requestJson<OpenCodePtyRouteResponse>('/api/opencode/pty', {
+    query: {
+      autostart: options?.autostart
+    },
+    fallbackError: 'Failed to list PTY sessions.'
+  });
+}
+
+export async function createOpenCodePty(
+  body: unknown,
+  options?: { autostart?: boolean }
+): Promise<OpenCodePtyRouteResponse> {
+  return requestJson<OpenCodePtyRouteResponse>('/api/opencode/pty', {
+    query: {
+      autostart: options?.autostart
+    },
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {})
+    },
+    fallbackError: 'Failed to create PTY session.'
+  });
+}
+
+export async function updateOpenCodePty(
+  ptyId: string,
+  body: unknown,
+  options?: { autostart?: boolean }
+): Promise<OpenCodePtyRouteResponse> {
+  return requestJson<OpenCodePtyRouteResponse>(`/api/opencode/pty/${encodeURIComponent(ptyId)}`, {
+    query: {
+      autostart: options?.autostart
+    },
+    init: {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {})
+    },
+    fallbackError: `Failed to update PTY session ${ptyId}.`
+  });
+}
+
+export async function deleteOpenCodePty(
+  ptyId: string,
+  options?: { autostart?: boolean }
+): Promise<OpenCodePtyRouteResponse> {
+  return requestJson<OpenCodePtyRouteResponse>(`/api/opencode/pty/${encodeURIComponent(ptyId)}`, {
+    query: {
+      autostart: options?.autostart
+    },
+    init: {
+      method: 'DELETE'
+    },
+    fallbackError: `Failed to delete PTY session ${ptyId}.`
   });
 }

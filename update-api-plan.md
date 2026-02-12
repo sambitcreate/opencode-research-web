@@ -139,7 +139,7 @@ Last updated: February 11, 2026
 - [ ] Run implementation spike for PTY websocket proxy feasibility in Next runtime.
 
 ### UI
-- [ ] Add terminal dock with PTY session create/select/remove.
+- [x] Add terminal dock with PTY session create/select/remove.
 - [ ] Add live PTY stream connection.
 - [ ] Add PTY input + resize actions.
 - [ ] Add reconnect handling for PTY sessions.
@@ -185,6 +185,9 @@ Last updated: February 11, 2026
   - `GET|POST /api/opencode/pty` for list/create
   - `PATCH|DELETE /api/opencode/pty/:ptyId` for update/delete
   - Updated README route docs and key-files list for PTY baseline coverage
+- [x] 2026-02-12: Added a Terminal Dock UI panel for PTY session create/select/remove workflows:
+  - Uses `/api/opencode/pty` and `/api/opencode/pty/:ptyId` routes via typed client adapter
+  - Includes PTY session list/selection, create/update/delete payload actions, and response inspectors
 - [x] 2026-02-11: Converted this document from narrative plan to checklist-style tracker.
 - [x] 2026-02-11: Completed initial P0 API backend slice:
   - `/api/opencode/events` SSE bridge (`scope`, `autostart`, source-tagged normalized events with `seq`)
