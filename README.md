@@ -14,6 +14,7 @@ Local-first OpenCode control plane for monitoring and executing OpenCode operati
   - session list + session detail/message timeline,
   - session timeline with per-message `revert` / `fork` / `copy`,
   - explicit session `undo` / `redo` controls,
+  - dashboard session quick actions (`rename`, `share`, `unshare`, `summarize`, `delete`) with share-link copy support,
   - transcript copy/export (`.md`) from selected session,
   - SSE event debug panel (`/api/opencode/events`) with source filtering,
   - session side summaries (todo, diff, context/cost when reported),

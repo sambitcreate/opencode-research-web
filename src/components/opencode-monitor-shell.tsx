@@ -205,6 +205,7 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
   const [sessionOperationBody, setSessionOperationBody] = useState<string>(SESSION_OPERATION_DEFINITIONS[0]?.template ?? '{}');
   const [operationResult, setOperationResult] = useState<OpenCodeControlResponse | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [sessionShareUrl, setSessionShareUrl] = useState<string | null>(null);
   const [isOperationRunning, setIsOperationRunning] = useState(false);
 
   const [permissionMessages, setPermissionMessages] = useState<Record<string, string>>({});
@@ -467,6 +468,10 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    setSessionShareUrl(null);
   }, [activeSessionId]);
 
   useEffect(() => {
@@ -1691,6 +1696,166 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
       setIsOperationRunning(false);
     }
   };
+
+  const runSessionQuickAction = useCallback(
+    async (input: {
+      label: string;
+      method: OpenCodeHttpMethod;
+      path: string;
+      body?: unknown;
+      clearActiveSession?: boolean;
+      onSuccess?: (response: OpenCodeControlResponse) => void | Promise<void>;
+    }) => {
+      if (!activeSessionId) return;
+      setIsOperationRunning(true);
+      setOperationError(null);
+      setEngineState('booting');
+
+      try {
+        const response = await callControl({
+          path: input.path,
+          method: input.method,
+          body: input.body
+        });
+        setOperationResult(response);
+        if (!response.ok) {
+          throw new Error(response.text || `${input.label} failed.`);
+        }
+
+        if (input.clearActiveSession) {
+          setActiveSessionId(null);
+          setSessionDetail(null);
+          setSessionTimeline(null);
+        }
+
+        await refreshMonitor({ silent: true });
+        if (!input.clearActiveSession) {
+          await Promise.all([
+            refreshSessionDetail(activeSessionId, { silent: true }),
+            refreshSessionTimeline(activeSessionId, { silent: true })
+          ]);
+        }
+        if (input.onSuccess) {
+          await input.onSuccess(response);
+        }
+        setEngineState('ready');
+      } catch (error) {
+        setOperationError(error instanceof Error ? error.message : `${input.label} failed.`);
+        setEngineState('error');
+      } finally {
+        setIsOperationRunning(false);
+      }
+    },
+    [
+      activeSessionId,
+      callControl,
+      refreshMonitor,
+      refreshSessionDetail,
+      refreshSessionTimeline,
+      setActiveSessionId,
+      setEngineState,
+      setSessionDetail,
+      setSessionTimeline
+    ]
+  );
+
+  const handleRenameSession = useCallback(async () => {
+    if (!activeSessionId) return;
+    const currentTitle = sessionDetail?.session.id === activeSessionId ? sessionDetail.session.title : 'Session';
+    const requestedTitle = window.prompt('Rename session', currentTitle || 'Session');
+    if (requestedTitle === null) return;
+    const title = requestedTitle.trim();
+    if (!title) {
+      setOperationError('Session title cannot be empty.');
+      return;
+    }
+
+    await runSessionQuickAction({
+      label: 'Rename session',
+      method: 'PATCH',
+      path: `/session/${encodeURIComponent(activeSessionId)}`,
+      body: { title }
+    });
+  }, [activeSessionId, runSessionQuickAction, sessionDetail?.session.id, sessionDetail?.session.title]);
+
+  const handleShareSession = useCallback(async () => {
+    if (!activeSessionId) return;
+    await runSessionQuickAction({
+      label: 'Share session',
+      method: 'POST',
+      path: `/session/${encodeURIComponent(activeSessionId)}/share`,
+      body: {},
+      onSuccess: async (response) => {
+        const candidates = collectStringFields(response.data, ['url', 'shareURL', 'shareUrl', 'link']);
+        const urlCandidate =
+          candidates.find((value) => value.startsWith('https://') || value.startsWith('http://')) || candidates[0] || null;
+        if (!urlCandidate) return;
+        setSessionShareUrl(urlCandidate);
+        try {
+          await navigator.clipboard.writeText(urlCandidate);
+        } catch {
+          // Keep the generated URL visible even if clipboard access is denied.
+        }
+      }
+    });
+  }, [activeSessionId, runSessionQuickAction]);
+
+  const handleUnshareSession = useCallback(async () => {
+    if (!activeSessionId) return;
+    await runSessionQuickAction({
+      label: 'Unshare session',
+      method: 'DELETE',
+      path: `/session/${encodeURIComponent(activeSessionId)}/share`,
+      onSuccess: () => {
+        setSessionShareUrl(null);
+      }
+    });
+  }, [activeSessionId, runSessionQuickAction]);
+
+  const handleSummarizeSession = useCallback(async () => {
+    if (!activeSessionId) return;
+    const body: Record<string, unknown> = {
+      auto: false
+    };
+    if (selectedProviderId.trim()) body.providerID = selectedProviderId.trim();
+    if (selectedModelId.trim()) body.modelID = selectedModelId.trim();
+    if (selectedModelVariant.trim()) {
+      body.variantID = selectedModelVariant.trim();
+      body.modelVariantID = selectedModelVariant.trim();
+    }
+
+    await runSessionQuickAction({
+      label: 'Summarize session',
+      method: 'POST',
+      path: `/session/${encodeURIComponent(activeSessionId)}/summarize`,
+      body
+    });
+  }, [activeSessionId, runSessionQuickAction, selectedModelId, selectedModelVariant, selectedProviderId]);
+
+  const handleDeleteSession = useCallback(async () => {
+    if (!activeSessionId) return;
+    const confirmed = window.confirm('Delete this session? This cannot be undone.');
+    if (!confirmed) return;
+
+    await runSessionQuickAction({
+      label: 'Delete session',
+      method: 'DELETE',
+      path: `/session/${encodeURIComponent(activeSessionId)}`,
+      clearActiveSession: true,
+      onSuccess: () => {
+        setSessionShareUrl(null);
+      }
+    });
+  }, [activeSessionId, runSessionQuickAction]);
+
+  const handleCopyShareLink = useCallback(async () => {
+    if (!sessionShareUrl) return;
+    try {
+      await navigator.clipboard.writeText(sessionShareUrl);
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Unable to copy share link.');
+    }
+  }, [sessionShareUrl]);
 
   const handleUndoSession = async () => {
     if (!activeSessionId) return;
@@ -4647,6 +4812,27 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
                               <Button size="sm" variant="secondary" disabled={isOperationRunning} onClick={handleRedoSession}>
                                 redo
                               </Button>
+                              <Button size="sm" variant="secondary" disabled={isOperationRunning} onClick={() => void handleRenameSession()}>
+                                rename
+                              </Button>
+                              <Button size="sm" variant="secondary" disabled={isOperationRunning} onClick={() => void handleSummarizeSession()}>
+                                summarize
+                              </Button>
+                              <Button size="sm" variant="secondary" disabled={isOperationRunning} onClick={() => void handleShareSession()}>
+                                share
+                              </Button>
+                              <Button size="sm" variant="secondary" disabled={isOperationRunning} onClick={() => void handleUnshareSession()}>
+                                unshare
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                disabled={isOperationRunning}
+                                className="text-[var(--critical)] hover:text-[var(--critical)]"
+                                onClick={() => void handleDeleteSession()}
+                              >
+                                delete
+                              </Button>
                             </div>
                           </div>
 
@@ -4656,6 +4842,22 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
                             <p>Total messages: {sessionDetail.messageCount}</p>
                             <p>Active tool calls: {sessionDetail.activeToolCalls}</p>
                           </div>
+                          {sessionShareUrl && (
+                            <div className="mt-2 rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] px-2.5 py-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="oc-mono break-all text-[11px] text-[var(--text-weak)]">{sessionShareUrl}</p>
+                                <Button size="sm" variant="secondary" onClick={() => void handleCopyShareLink()}>
+                                  copy link
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                          {operationError && <p className="mt-2 text-[11px] text-[var(--critical)]">{operationError}</p>}
+                          {operationResult && (
+                            <p className="mt-1 text-[11px] text-[var(--text-weaker)]">
+                              Last action: {operationResult.status} {operationResult.ok ? 'ok' : 'error'}
+                            </p>
+                          )}
                           {selectedSession?.directory && (
                             <p className="oc-mono mt-2 break-all text-[11px] text-[var(--text-weaker)]">
                               {selectedSession.directory}

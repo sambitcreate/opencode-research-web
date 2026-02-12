@@ -187,7 +187,7 @@ Last updated: February 12, 2026
 
 ## Definition of Done (Parity Milestone)
 
-- [ ] Manage sessions end-to-end in web UI:
+- [ ] Manage sessions end-to-end in web UI: (in progress)
   - create/select/search/fork/share/rename/archive/delete/undo/redo/summarize
 - [ ] Send prompts in normal/command/shell paths with mentions and attachments.
 - [ ] Handle permission and question prompts with full context.
@@ -199,6 +199,11 @@ Last updated: February 12, 2026
 
 ## Done Log
 
+- [x] 2026-02-12: Added session quick-action controls in dashboard session detail pane:
+  - Added focused controls for `rename`, `share`, `unshare`, `summarize`, and `delete` alongside existing `undo`/`redo`
+  - Added session share-link surfacing + copy-link affordance when `/session/:id/share` returns a URL
+  - Reused existing action plumbing and monitor/session refresh behavior to keep payload contracts unchanged
+  - Verified with `npm run lint` and `npm run build -- --webpack`
 - [x] 2026-02-12: Introduced centralized monitor store/reducer with event-application model:
   - Added `src/lib/opencode-monitor/store.ts` for reducer-managed monitor/session/event state
   - Refactored `src/components/opencode-monitor-shell.tsx` to use reducer-backed state transitions
