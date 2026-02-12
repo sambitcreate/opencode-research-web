@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import {
   getOpenCodeSessionDetail,
   getOpenCodeSessions,
+  getOpenCodeStatus,
   type OpenCodeSessionDetailInclude
 } from '@/lib/opencode';
 
@@ -33,9 +34,9 @@ function parseIncludes(value: string | null): OpenCodeSessionDetailInclude[] {
 }
 
 export async function GET(request: NextRequest) {
+  const searchParams = new URL(request.url).searchParams;
+  const sessionId = searchParams.get('sessionId')?.trim() || '';
   try {
-    const searchParams = new URL(request.url).searchParams;
-    const sessionId = searchParams.get('sessionId')?.trim() || '';
     const autostart = searchParams.get('autostart') === '1';
     const limitParam = searchParams.get('limit');
     const limit = parsePositiveInteger(limitParam, 40);
@@ -65,9 +66,31 @@ export async function GET(request: NextRequest) {
 
     return Response.json(sessions);
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown OpenCode session error';
+    if (!sessionId) {
+      const status = await getOpenCodeStatus().catch(() => ({
+        running: false,
+        host: process.env.OPENCODE_HOST?.trim() || '127.0.0.1',
+        port: Number.parseInt(process.env.OPENCODE_PORT ?? '4096', 10) || 4096
+      }));
+
+      return Response.json(
+        {
+          running: status.running,
+          host: status.host,
+          port: status.port,
+          started: false,
+          count: 0,
+          sessions: [],
+          error: errorMessage
+        },
+        { status: 500 }
+      );
+    }
+
     return Response.json(
       {
-        error: error instanceof Error ? error.message : 'Unknown OpenCode session error'
+        error: errorMessage
       },
       { status: 500 }
     );
