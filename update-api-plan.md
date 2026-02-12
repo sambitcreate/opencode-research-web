@@ -147,7 +147,7 @@ Last updated: February 11, 2026
 
 ## Cross-Cutting Engineering Tasks
 
-- [ ] Build typed backend service adapter module (no scattered direct `fetch` in components).
+- [x] Build typed backend service adapter module (no scattered direct `fetch` in components).
 - [ ] Add event method-router layer before reducer mutation.
 - [ ] Keep optional/additive response fields only (no breaking contract changes).
 - [ ] Add compatibility checks when OpenCode API evolves.
@@ -179,6 +179,7 @@ Last updated: February 11, 2026
 
 ## Done Log
 
+- [x] 2026-02-12: Added typed client backend adapter module (`src/lib/opencode-api-client.ts`) and refactored `src/app/page.tsx` to route API calls through the adapter (no direct component `fetch` calls remain).
 - [x] 2026-02-11: Converted this document from narrative plan to checklist-style tracker.
 - [x] 2026-02-11: Completed initial P0 API backend slice:
   - `/api/opencode/events` SSE bridge (`scope`, `autostart`, source-tagged normalized events with `seq`)

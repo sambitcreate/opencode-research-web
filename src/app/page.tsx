@@ -34,6 +34,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  callOpenCodeControl,
+  fetchOpenCodeFiles,
+  fetchOpenCodeMonitorSnapshot,
+  fetchOpenCodeSessionDetail,
+  fetchOpenCodeSessionTimeline,
+  fetchOpenCodeSessionTranscript,
+  fetchOpenCodeSystemSnapshot
+} from '@/lib/opencode-api-client';
 import { cn } from '@/lib/utils';
 
 type OpenCodeStatus = {
@@ -1776,35 +1785,14 @@ export default function OpenCodeMonitorPage() {
       timeoutMs?: number;
       parseSsePayload?: boolean;
     }): Promise<OpenCodeControlResponse> => {
-      const response = await fetch('/api/opencode/control', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          path: input.path,
-          method: input.method ?? 'GET',
-          body: input.body,
-          timeoutMs: input.timeoutMs,
-          parseSsePayload: input.parseSsePayload === true,
-          autostart: true
-        })
+      return callOpenCodeControl({
+        path: input.path,
+        method: input.method,
+        body: input.body,
+        timeoutMs: input.timeoutMs,
+        parseSsePayload: input.parseSsePayload,
+        autostart: true
       });
-
-      const payload = (await response.json()) as OpenCodeControlResponse | { error?: string };
-      if (
-        payload &&
-        typeof payload === 'object' &&
-        'ok' in payload &&
-        'status' in payload &&
-        'contentType' in payload
-      ) {
-        return payload as OpenCodeControlResponse;
-      }
-
-      const message =
-        typeof (payload as { error?: string }).error === 'string'
-          ? (payload as { error?: string }).error
-          : `OpenCode control request failed with status ${response.status}`;
-      throw new Error(message);
     },
     []
   );
@@ -1813,16 +1801,11 @@ export default function OpenCodeMonitorPage() {
     if (!options?.silent) setIsMonitorLoading(true);
 
     try {
-      const response = await fetch(
-        '/api/opencode/monitor?sessionLimit=120&autostart=0&include=providers,agents,skills,commands,path,vcs,mcp,lsp,formatter,config,openapi',
-        { cache: 'no-store' }
-      );
-      const payload = (await response.json()) as OpenCodeMonitorSnapshot | { error?: string };
-      if (!response.ok) {
-        throw new Error((payload as { error?: string }).error || 'Failed to fetch OpenCode monitor snapshot.');
-      }
-
-      const snapshot = payload as OpenCodeMonitorSnapshot;
+      const snapshot = await fetchOpenCodeMonitorSnapshot<OpenCodeMonitorSnapshot>({
+        sessionLimit: 120,
+        autostart: false,
+        include: ['providers', 'agents', 'skills', 'commands', 'path', 'vcs', 'mcp', 'lsp', 'formatter', 'config', 'openapi']
+      });
       setMonitor(snapshot);
       setEngine(snapshot.status);
       setMonitorError(null);
@@ -1844,17 +1827,12 @@ export default function OpenCodeMonitorPage() {
     if (!options?.silent) setIsSessionDetailLoading(true);
 
     try {
-      const response = await fetch(
-        `/api/opencode/sessions?sessionId=${encodeURIComponent(sessionId)}&messageLimit=160&include=messages,todo,diff,children`,
-        {
-          cache: 'no-store'
-        }
-      );
-      const payload = (await response.json()) as OpenCodeSessionDetail | { error?: string };
-      if (!response.ok) {
-        throw new Error((payload as { error?: string }).error || `Failed to load session ${sessionId}.`);
-      }
-      setSessionDetail(payload as OpenCodeSessionDetail);
+      const payload = await fetchOpenCodeSessionDetail<OpenCodeSessionDetail>(sessionId, {
+        messageLimit: 160,
+        include: ['messages', 'todo', 'diff', 'children'],
+        autostart: false
+      });
+      setSessionDetail(payload);
       setSessionError(null);
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : 'Unable to load session detail.');
@@ -1868,14 +1846,10 @@ export default function OpenCodeMonitorPage() {
     if (!options?.silent) setIsTimelineLoading(true);
 
     try {
-      const response = await fetch(`/api/opencode/session/${encodeURIComponent(sessionId)}/timeline`, {
-        cache: 'no-store'
+      const payload = await fetchOpenCodeSessionTimeline<OpenCodeSessionTimeline>(sessionId, {
+        autostart: false
       });
-      const payload = (await response.json()) as OpenCodeSessionTimeline | { error?: string };
-      if (!response.ok) {
-        throw new Error((payload as { error?: string }).error || `Failed to load session timeline for ${sessionId}.`);
-      }
-      setSessionTimeline(payload as OpenCodeSessionTimeline);
+      setSessionTimeline(payload);
       setTimelineError(null);
     } catch (error) {
       setTimelineError(error instanceof Error ? error.message : 'Unable to load timeline.');
@@ -3197,17 +3171,10 @@ export default function OpenCodeMonitorPage() {
     setTranscriptError(null);
 
     try {
-      const response = await fetch(
-        `/api/opencode/session/${encodeURIComponent(activeSessionId)}/transcript?toolDetails=1&assistantMetadata=1`,
-        {
-          cache: 'no-store'
-        }
-      );
-      const payload = (await response.json()) as OpenCodeSessionTranscript | { error?: string };
-      if (!response.ok) {
-        throw new Error((payload as { error?: string }).error || 'Failed to build transcript.');
-      }
-      const transcript = payload as OpenCodeSessionTranscript;
+      const transcript = await fetchOpenCodeSessionTranscript<OpenCodeSessionTranscript>(activeSessionId, {
+        toolDetails: true,
+        assistantMetadata: true
+      });
       await navigator.clipboard.writeText(transcript.markdown);
     } catch (error) {
       setTranscriptError(error instanceof Error ? error.message : 'Unable to copy transcript.');
@@ -3222,18 +3189,10 @@ export default function OpenCodeMonitorPage() {
     setTranscriptError(null);
 
     try {
-      const response = await fetch(
-        `/api/opencode/session/${encodeURIComponent(activeSessionId)}/transcript?toolDetails=1&assistantMetadata=1`,
-        {
-          cache: 'no-store'
-        }
-      );
-      const payload = (await response.json()) as OpenCodeSessionTranscript | { error?: string };
-      if (!response.ok) {
-        throw new Error((payload as { error?: string }).error || 'Failed to export transcript.');
-      }
-
-      const transcript = payload as OpenCodeSessionTranscript;
+      const transcript = await fetchOpenCodeSessionTranscript<OpenCodeSessionTranscript>(activeSessionId, {
+        toolDetails: true,
+        assistantMetadata: true
+      });
       const slug = (sessionDetail?.session.title || activeSessionId)
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
@@ -3477,15 +3436,7 @@ export default function OpenCodeMonitorPage() {
 
       appendRawQueryParams(params, fileExtraParams);
 
-      const response = await fetch(`/api/opencode/files?${params.toString()}`, {
-        cache: 'no-store'
-      });
-      const payload = (await response.json()) as OpenCodeFilesResponse | { error?: string };
-      if (!response.ok) {
-        throw new Error((payload as { error?: string }).error || 'Files request failed.');
-      }
-
-      const parsed = payload as OpenCodeFilesResponse;
+      const parsed = await fetchOpenCodeFiles<OpenCodeFilesResponse>(params);
       setFileResponse(parsed);
       if (!parsed.result.ok) {
         setFileError(parsed.result.text || `Request failed (${parsed.result.status}).`);
@@ -3510,14 +3461,11 @@ export default function OpenCodeMonitorPage() {
     setSystemSnapshotError(null);
 
     try {
-      const response = await fetch('/api/opencode/system?include=project,project/current&autostart=0', {
-        cache: 'no-store'
+      const payload = await fetchOpenCodeSystemSnapshot<OpenCodeSystemSnapshotResponse>({
+        include: ['project', 'project/current'],
+        autostart: false
       });
-      const payload = (await response.json()) as OpenCodeSystemSnapshotResponse | { error?: string };
-      if (!response.ok) {
-        throw new Error((payload as { error?: string }).error || 'Failed to load project snapshot.');
-      }
-      setSystemSnapshot(payload as OpenCodeSystemSnapshotResponse);
+      setSystemSnapshot(payload);
     } catch (error) {
       setSystemSnapshotError(error instanceof Error ? error.message : 'Unable to load project snapshot.');
     } finally {
@@ -3688,15 +3636,10 @@ export default function OpenCodeMonitorPage() {
     setConfigError(null);
 
     try {
-      const response = await fetch('/api/opencode/system?include=config,global/config&autostart=0', {
-        cache: 'no-store'
+      const snapshot = await fetchOpenCodeSystemSnapshot<OpenCodeSystemSnapshotResponse>({
+        include: ['config', 'global/config'],
+        autostart: false
       });
-      const payload = (await response.json()) as OpenCodeSystemSnapshotResponse | { error?: string };
-      if (!response.ok) {
-        throw new Error((payload as { error?: string }).error || 'Unable to read config snapshot.');
-      }
-
-      const snapshot = payload as OpenCodeSystemSnapshotResponse;
       const localData = snapshot.sections?.config?.data ?? {};
       const globalData = snapshot.sections?.['global/config']?.data ?? {};
       const localText = prettyJson(localData);
