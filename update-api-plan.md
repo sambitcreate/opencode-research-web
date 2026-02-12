@@ -122,7 +122,7 @@ Last updated: February 11, 2026
   - `formatter`
   - `path`
   - `vcs`
-- [ ] Extend `GET /api/opencode/openapi` with route metadata transform for UI form generation.
+- [x] Extend `GET /api/opencode/openapi` with route metadata transform for UI form generation.
 
 ### UI
 - [ ] Add file explorer/search/read/status module.
@@ -219,3 +219,6 @@ Last updated: February 11, 2026
 - [x] 2026-02-11: Added `/api/opencode/system` aggregate route:
   - Supports additive `include=` selection across config/project/mcp/lsp/formatter/path/vcs snapshots
   - Returns per-section invocation result envelopes and aggregated errors
+- [x] 2026-02-11: Extended `/api/opencode/openapi` with form metadata transform:
+  - Adds additive `routeMetadata` entries (path params, query hints, per-method body requirement/templates)
+  - Adds additive `metadata` envelope for generated timestamp and route metadata count

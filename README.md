@@ -185,6 +185,9 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
 - `GET /api/opencode/openapi`
   - Returns parsed OpenCode OpenAPI endpoint snapshot for explorer UX.
   - Attempts live OpenCode spec first; falls back to an embedded endpoint manifest.
+  - Includes additive route form metadata for UI generation:
+    - `routeMetadata[]` with path params, query hints, per-method body requirements, and JSON body templates
+    - `metadata.generatedAt` and `metadata.count`
 
 - `GET /api/opencode/events`
   - SSE bridge for OpenCode event streams with normalized payloads.
