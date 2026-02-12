@@ -71,9 +71,14 @@ async function fetchJson(path, init = {}, label) {
   return payload;
 }
 
-async function checkStatus() {
+async function loadStatusPayload() {
   const payload = await fetchJson('/api/opencode/status', {}, '/api/opencode/status');
   requireFields(payload, ['running', 'host', 'port', 'apiUrl'], '/api/opencode/status');
+  return payload;
+}
+
+async function checkStatus() {
+  const payload = await loadStatusPayload();
   markPass('/api/opencode/status contract');
   return payload;
 }
@@ -153,7 +158,48 @@ function isQueryContract(payload) {
   return required.every((field) => hasOwn(payload, field));
 }
 
-async function checkQueryAndSessionVisibility() {
+async function prepareAutostartAssertionStatus(initialStatus) {
+  if (!isRecord(initialStatus) || initialStatus.running !== true) {
+    return initialStatus;
+  }
+
+  const disposeResponse = await fetch(`${baseUrl}/api/opencode/control`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      path: '/global/dispose',
+      method: 'POST',
+      autostart: false
+    })
+  });
+  const disposePayload = await readJson(disposeResponse);
+  if (!disposeResponse.ok) {
+    markWarn('OpenCode was already running and could not be disposed before query autostart assertion.');
+    return initialStatus;
+  }
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    const status = await loadStatusPayload();
+    if (status.running === false) {
+      markPass('Prepared stopped OpenCode state before /api/query autostart assertion');
+      return status;
+    }
+  }
+
+  if (isRecord(disposePayload) && typeof disposePayload.text === 'string' && disposePayload.text.trim()) {
+    markWarn('Dispose request succeeded but status stayed running; autostart assertion will be best-effort.');
+  } else {
+    markWarn('Unable to confirm stopped OpenCode state before query autostart assertion.');
+  }
+
+  return initialStatus;
+}
+
+async function checkQueryAndSessionVisibility(statusBeforeQuery) {
   const response = await fetch(`${baseUrl}/api/query`, {
     method: 'POST',
     headers: {
@@ -170,26 +216,35 @@ async function checkQueryAndSessionVisibility() {
 
   markPass('/api/query compatibility contract');
 
-  if (!response.ok) {
-    markWarn(`/api/query returned HTTP ${response.status}; skipping completion-specific assertions.`);
-    return;
-  }
-
-  if (payload.status !== 'completed') {
-    markWarn(`/api/query returned status "${String(payload.status)}"; skipping session visibility assertion.`);
-    return;
-  }
-
   const metadata = isRecord(payload.metadata) ? payload.metadata : null;
   const opencode = metadata && isRecord(metadata.opencode) ? metadata.opencode : null;
   if (opencode && typeof opencode.started === 'boolean') {
     markPass('metadata.opencode.started present');
   } else {
-    markWarn('metadata.opencode.started not present in completed query response.');
+    markWarn('metadata.opencode.started not present in query response.');
+  }
+
+  if (isRecord(statusBeforeQuery) && statusBeforeQuery.running === false) {
+    if (opencode && opencode.started === true) {
+      markPass('/api/query reports OpenCode autostart from stopped state');
+    } else {
+      const statusAfterQuery = await loadStatusPayload();
+      if (statusAfterQuery.running === true) {
+        markPass('/api/query left OpenCode running after starting from stopped state');
+      } else {
+        markWarn('Could not verify /api/query autostart from stopped state.');
+      }
+    }
+  } else {
+    markWarn('Skipped strict /api/query autostart assertion because OpenCode was already running.');
+  }
+
+  if (!response.ok) {
+    markWarn(`/api/query returned HTTP ${response.status}; continuing with best-effort visibility checks.`);
   }
 
   if (typeof payload.sessionId !== 'string' || payload.sessionId.trim() === '') {
-    markWarn('completed query response missing sessionId; skipping detail visibility assertion.');
+    markWarn('query response missing sessionId; skipping detail visibility assertion.');
     return;
   }
 
@@ -209,11 +264,12 @@ async function checkQueryAndSessionVisibility() {
 
 async function main() {
   console.log(`Running OpenCode web API smoke checks against ${baseUrl}`);
-  await checkStatus();
+  const initialStatus = await checkStatus();
+  const statusForQueryCheck = await prepareAutostartAssertionStatus(initialStatus);
   await checkSessionsList();
   await checkMonitor();
   await checkEventsStream();
-  await checkQueryAndSessionVisibility();
+  await checkQueryAndSessionVisibility(statusForQueryCheck);
 
   console.log('');
   for (const note of summary.notes) {

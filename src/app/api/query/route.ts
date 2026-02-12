@@ -1,5 +1,5 @@
 import type { NextRequest } from 'next/server';
-import { runResearchQuery } from '@/lib/opencode';
+import { getOpenCodeStatus, runResearchQuery } from '@/lib/opencode';
 
 export const runtime = 'nodejs';
 
@@ -55,6 +55,43 @@ function buildQueryResponse(input: {
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function extractErrorString(error: unknown, key: string): string | null {
+  const record = asRecord(error);
+  if (!record) return null;
+  const value = record[key];
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function extractErrorNumber(error: unknown, key: string): number | null {
+  const record = asRecord(error);
+  if (!record) return null;
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function extractErrorOpenCode(error: unknown): QueryResponseShape['metadata']['opencode'] | null {
+  const record = asRecord(error);
+  if (!record) return null;
+  const opencode = asRecord(record.opencode);
+  if (!opencode) return null;
+  const host = typeof opencode.host === 'string' ? opencode.host : null;
+  const port = typeof opencode.port === 'number' ? opencode.port : null;
+  const started = typeof opencode.started === 'boolean' ? opencode.started : null;
+  const command = typeof opencode.command === 'string' ? opencode.command : null;
+  if (!host || port === null || started === null || !command) return null;
+  return {
+    host,
+    port,
+    started,
+    command
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const payload = (await request.json()) as { query?: unknown };
@@ -99,16 +136,29 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
+    const sessionId = extractErrorString(error, 'sessionId') ?? '';
+    const processingTime = extractErrorNumber(error, 'processingTime') ?? 0;
+    const opencodeFromError = extractErrorOpenCode(error);
+    const opencodeStatus = opencodeFromError
+      ? opencodeFromError
+      : await getOpenCodeStatus()
+          .then((status) => ({
+            host: status.host,
+            port: status.port,
+            started: status.running,
+            command: status.command
+          }))
+          .catch(() => null);
     console.error('Query processing error:', error);
     const response = buildQueryResponse({
       query: '',
       status: 'failed',
-      sessionId: '',
+      sessionId,
       answer: '',
       sources: [],
-      processingTime: 0,
+      processingTime,
       confidenceScore: 0,
-      opencode: null,
+      opencode: opencodeStatus,
       error: {
         code: 'QUERY_PROCESSING_ERROR',
         message

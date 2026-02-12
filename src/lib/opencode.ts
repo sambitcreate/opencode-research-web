@@ -142,6 +142,17 @@ type ResearchPayload = {
   confidenceScore: number;
 };
 
+type OpenCodeResearchError = Error & {
+  sessionId?: string;
+  opencode?: {
+    host: string;
+    port: number;
+    started: boolean;
+    command: string;
+  };
+  processingTime?: number;
+};
+
 export type OpenCodeStatus = {
   running: boolean;
   host: string;
@@ -618,17 +629,26 @@ async function sendResearchPrompt(query: string): Promise<ResearchPayload> {
     throw new Error('OpenCode did not return a valid session id.');
   }
 
-  const messageResponse = await requestOpenCode(
-    `/session/${encodeURIComponent(sessionId)}/message`,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        parts: [{ type: 'text', text: buildResearchPrompt(query) }],
-        stream: false
-      })
-    },
-    safeParseInt(process.env.OPENCODE_QUERY_TIMEOUT_MS, 120_000)
-  );
+  let messageResponse: Response;
+  try {
+    messageResponse = await requestOpenCode(
+      `/session/${encodeURIComponent(sessionId)}/message`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          parts: [{ type: 'text', text: buildResearchPrompt(query) }],
+          stream: false
+        })
+      },
+      safeParseInt(process.env.OPENCODE_QUERY_TIMEOUT_MS, 120_000)
+    );
+  } catch (error) {
+    const wrapped = new Error(
+      error instanceof Error ? error.message : 'OpenCode message request failed.'
+    ) as OpenCodeResearchError;
+    wrapped.sessionId = sessionId;
+    throw wrapped;
+  }
 
   const messagePayload = await parseResponseBody(messageResponse);
   const answer = sanitizeAnswer(messagePayload.text || 'OpenCode returned no text output.');
@@ -968,19 +988,32 @@ export async function runResearchQuery(query: string): Promise<{
 }> {
   const startedAt = Date.now();
   const opencode = await ensureOpenCodeServer();
-  const payload = await sendResearchPrompt(query);
-  const processingTime = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+  try {
+    const payload = await sendResearchPrompt(query);
+    const processingTime = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
 
-  return {
-    ...payload,
-    opencode: {
+    return {
+      ...payload,
+      opencode: {
+        host: opencode.host,
+        port: opencode.port,
+        started: opencode.started,
+        command: opencode.command
+      },
+      processingTime
+    };
+  } catch (error) {
+    const wrapped =
+      error instanceof Error ? (error as OpenCodeResearchError) : (new Error('Unknown research error.') as OpenCodeResearchError);
+    wrapped.opencode = {
       host: opencode.host,
       port: opencode.port,
       started: opencode.started,
       command: opencode.command
-    },
-    processingTime
-  };
+    };
+    wrapped.processingTime = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+    throw wrapped;
+  }
 }
 
 export async function getOpenCodeStatus(): Promise<OpenCodeStatus> {
@@ -1177,6 +1210,17 @@ export async function getOpenCodeQuestions(options?: {
   }
 }
 
+async function invokeOptionalOpenCodeEndpoint(path: string): Promise<OpenCodeInvocationResult | null> {
+  try {
+    return await invokeOpenCodeEndpoint({
+      path,
+      method: 'GET'
+    });
+  } catch {
+    return null;
+  }
+}
+
 export async function getOpenCodeMonitorSnapshot(options?: {
   ensureRunning?: boolean;
   sessionLimit?: number;
@@ -1239,19 +1283,19 @@ export async function getOpenCodeMonitorSnapshot(options?: {
     getOpenCodeSessionStatusMap(),
     getOpenCodePermissions(),
     getOpenCodeQuestions(),
-    includeProviders ? invokeOpenCodeEndpoint({ path: '/provider', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includeCommands ? invokeOpenCodeEndpoint({ path: '/command', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includeAgents ? invokeOpenCodeEndpoint({ path: '/agent', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includeSkills ? invokeOpenCodeEndpoint({ path: '/skill', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includePath ? invokeOpenCodeEndpoint({ path: '/path', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includeVcs ? invokeOpenCodeEndpoint({ path: '/vcs', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includeMcp ? invokeOpenCodeEndpoint({ path: '/mcp', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includeLsp ? invokeOpenCodeEndpoint({ path: '/lsp', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includeFormatter ? invokeOpenCodeEndpoint({ path: '/formatter', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includeProjects ? invokeOpenCodeEndpoint({ path: '/project', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includeProjects ? invokeOpenCodeEndpoint({ path: '/project/current', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includeConfig ? invokeOpenCodeEndpoint({ path: '/config', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includeConfig ? invokeOpenCodeEndpoint({ path: '/global/config', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includeProviders ? invokeOptionalOpenCodeEndpoint('/provider') : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includeCommands ? invokeOptionalOpenCodeEndpoint('/command') : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includeAgents ? invokeOptionalOpenCodeEndpoint('/agent') : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includeSkills ? invokeOptionalOpenCodeEndpoint('/skill') : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includePath ? invokeOptionalOpenCodeEndpoint('/path') : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includeVcs ? invokeOptionalOpenCodeEndpoint('/vcs') : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includeMcp ? invokeOptionalOpenCodeEndpoint('/mcp') : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includeLsp ? invokeOptionalOpenCodeEndpoint('/lsp') : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includeFormatter ? invokeOptionalOpenCodeEndpoint('/formatter') : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includeProjects ? invokeOptionalOpenCodeEndpoint('/project') : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includeProjects ? invokeOptionalOpenCodeEndpoint('/project/current') : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includeConfig ? invokeOptionalOpenCodeEndpoint('/config') : Promise.resolve<OpenCodeInvocationResult | null>(null),
+    includeConfig ? invokeOptionalOpenCodeEndpoint('/global/config') : Promise.resolve<OpenCodeInvocationResult | null>(null),
     includeOpenApi || includeCompatibility ? getOpenCodeOpenApi() : Promise.resolve(fallbackOpenApiSnapshot())
   ]);
 

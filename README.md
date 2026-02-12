@@ -281,7 +281,10 @@ Optional live smoke test:
 - `/api/opencode/sessions` list contract
 - `/api/opencode/monitor` contract
 - `/api/opencode/events?scope=both` ready-event stream handshake
-- `/api/query` compatibility contract and, when query execution succeeds, session detail visibility + `metadata.opencode.started`
+- `/api/query` compatibility contract
+- best-effort query autostart assertion from stopped OpenCode state
+- `metadata.opencode.started` presence
+- session detail visibility when `/api/query` returns a `sessionId`
 
 ## Troubleshooting
 

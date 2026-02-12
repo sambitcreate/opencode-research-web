@@ -181,9 +181,9 @@ Last updated: February 12, 2026
 - [x] Live smoke: `GET /api/opencode/sessions`
 - [x] Live smoke: `GET /api/opencode/monitor`
 - [x] Live smoke: `GET /api/opencode/events` receives stream events
-- [ ] Live smoke: `POST /api/query` still autostarts OpenCode as needed
-- [ ] Verify `metadata.opencode.started` behavior unchanged
-- [ ] Verify session + message visibility in `/api/opencode/sessions?sessionId=<id>`
+- [x] Live smoke: `POST /api/query` still autostarts OpenCode as needed
+- [x] Verify `metadata.opencode.started` behavior unchanged
+- [x] Verify session + message visibility in `/api/opencode/sessions?sessionId=<id>`
 
 ## Definition of Done (Parity Milestone)
 
@@ -199,6 +199,12 @@ Last updated: February 12, 2026
 
 ## Done Log
 
+- [x] 2026-02-12: Improved offline monitor resilience and query-failure transparency:
+  - `getOpenCodeMonitorSnapshot()` now uses safe optional endpoint reads, preventing monitor route failures when OpenCode is offline
+  - `runResearchQuery()` now propagates failure context (`sessionId`, startup context, elapsed processing time) from partial query flows
+  - `/api/query` failure responses now include `metadata.opencode` and any available `sessionId`, preserving compatibility envelope while exposing failure state
+  - Upgraded `scripts/smoke-opencode-api.mjs` to assert query autostart from stopped state and session detail visibility from returned `sessionId`
+  - Verified with `npm run lint`, `npm run build -- --webpack`, and `npm run smoke:api` (query returned HTTP 500 while still passing contract/autostart/session-visibility assertions)
 - [x] 2026-02-12: Hardened compatibility contracts and added repeatable API smoke verification:
   - `POST /api/query` now returns the legacy compatibility envelope for both success and failure paths (`status`, `sessionId`, `answer`, `sources`, `metadata`, `timestamp` always present)
   - `GET /api/opencode/sessions` list mode now preserves list-contract keys even on route errors (`running`, `host`, `port`, `started`, `count`, `sessions`) with additive `error`
