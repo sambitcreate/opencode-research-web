@@ -28,6 +28,7 @@ Local-first OpenCode control plane for monitoring and executing OpenCode operati
   - config editor for `/config` and `/global/config` drafts with diff/confirm apply flow,
   - richer permission/question queue context (session/tool/command/question/options hints),
   - expanded engine status summaries for LSP, formatter, and config/plugin signals,
+  - OpenCode API compatibility diagnostics (required/recommended endpoint/method checks against live OpenAPI),
   - session operation runner (fork/revert/share/summarize/delete/etc),
   - permission and question response queues,
   - TUI command shortcuts (`/tui/*` routes),
@@ -134,11 +135,11 @@ The app uses OpenCode HTTP APIs directly and remains local-first:
     - `autostart=1` optional
     - `sessionLimit` optional (default 80)
     - `include` optional CSV:
-      - `providers,agents,skills,commands,path,vcs,mcp,lsp,formatter,projects,config,openapi`
+      - `providers,agents,skills,commands,path,vcs,mcp,lsp,formatter,projects,config,compatibility,openapi`
   - Returns:
     - `status`, `sessions`, `sessionStatus`, `permissions`, `questions`,
     - `providers`, `commands`, `agents`, `skills`, `pathInfo`, `vcsInfo`,
-    - optional normalized blocks (when included): `mcp`, `lsp`, `formatter`, `projects`, `config`
+    - optional normalized blocks (when included): `mcp`, `lsp`, `formatter`, `projects`, `config`, `compatibility`
     - `openapi`, `errors`
 
 - `POST /api/opencode/control`

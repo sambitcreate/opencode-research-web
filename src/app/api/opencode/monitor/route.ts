@@ -24,6 +24,7 @@ function parseIncludes(value: string | null): OpenCodeMonitorInclude[] {
     'formatter',
     'projects',
     'config',
+    'compatibility',
     'openapi'
   ]);
 

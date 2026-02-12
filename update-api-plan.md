@@ -150,7 +150,7 @@ Last updated: February 11, 2026
 - [x] Build typed backend service adapter module (no scattered direct `fetch` in components).
 - [x] Add event method-router layer before reducer mutation.
 - [ ] Keep optional/additive response fields only (no breaking contract changes).
-- [ ] Add compatibility checks when OpenCode API evolves.
+- [x] Add compatibility checks when OpenCode API evolves.
 - [ ] Keep monitor payload size bounded (include flags + lazy loads).
 
 ## Validation Checklist (Run Per Meaningful Change)
@@ -188,6 +188,10 @@ Last updated: February 11, 2026
 - [x] 2026-02-12: Added a Terminal Dock UI panel for PTY session create/select/remove workflows:
   - Uses `/api/opencode/pty` and `/api/opencode/pty/:ptyId` routes via typed client adapter
   - Includes PTY session list/selection, create/update/delete payload actions, and response inspectors
+- [x] 2026-02-12: Added OpenCode API compatibility checks against live OpenAPI snapshots:
+  - Added additive monitor include flag `compatibility`
+  - Added compatibility report generation (required/recommended endpoint+method checks) in `src/lib/opencode.ts`
+  - Surfaced compatibility status/report in Engine Snapshot UI and updated README monitor docs
 - [x] 2026-02-11: Converted this document from narrative plan to checklist-style tracker.
 - [x] 2026-02-11: Completed initial P0 API backend slice:
   - `/api/opencode/events` SSE bridge (`scope`, `autostart`, source-tagged normalized events with `seq`)

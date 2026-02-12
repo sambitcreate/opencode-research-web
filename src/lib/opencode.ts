@@ -128,6 +128,55 @@ export type OpenCodeOpenApiSnapshot = {
   endpoints: OpenCodeEndpointDefinition[];
 };
 
+export type OpenCodeCompatibilityMethodMismatch = {
+  path: string;
+  requiredMethods: OpenCodeHttpMethod[];
+  availableMethods: OpenCodeHttpMethod[];
+  missingMethods: OpenCodeHttpMethod[];
+  required: boolean;
+};
+
+export type OpenCodeCompatibilitySnapshot = {
+  status: 'pass' | 'warn' | 'fail' | 'unverified';
+  checkedAt: string;
+  source: OpenCodeOpenApiSnapshot['source'];
+  requiredRuleCount: number;
+  recommendedRuleCount: number;
+  missingRequiredEndpoints: string[];
+  missingRecommendedEndpoints: string[];
+  methodMismatches: OpenCodeCompatibilityMethodMismatch[];
+  notes: string[];
+};
+
+type OpenCodeCompatibilityRule = {
+  path: string;
+  methods: OpenCodeHttpMethod[];
+  required: boolean;
+};
+
+const OPEN_CODE_COMPATIBILITY_RULES: OpenCodeCompatibilityRule[] = [
+  { path: '/session', methods: ['GET', 'POST'], required: true },
+  { path: '/session/{sessionID}', methods: ['GET'], required: true },
+  { path: '/session/{sessionID}/message', methods: ['POST'], required: true },
+  { path: '/session/{sessionID}/prompt_async', methods: ['POST'], required: true },
+  { path: '/session/{sessionID}/command', methods: ['POST'], required: true },
+  { path: '/session/{sessionID}/shell', methods: ['POST'], required: true },
+  { path: '/session/{sessionID}/revert', methods: ['POST'], required: true },
+  { path: '/session/{sessionID}/unrevert', methods: ['POST'], required: true },
+  { path: '/permission/{requestID}/reply', methods: ['POST'], required: true },
+  { path: '/question/{requestID}/reply', methods: ['POST'], required: true },
+  { path: '/question/{requestID}/reject', methods: ['POST'], required: true },
+  { path: '/event', methods: ['GET'], required: true },
+  { path: '/global/event', methods: ['GET'], required: true },
+  { path: '/provider', methods: ['GET'], required: false },
+  { path: '/mcp', methods: ['GET'], required: false },
+  { path: '/pty', methods: ['GET', 'POST'], required: false },
+  { path: '/pty/{ptyID}', methods: ['DELETE'], required: false },
+  { path: '/project/current', methods: ['GET', 'POST'], required: false },
+  { path: '/config', methods: ['GET'], required: false },
+  { path: '/global/config', methods: ['GET'], required: false }
+];
+
 export type OpenCodePermissionRequest = Record<string, unknown>;
 export type OpenCodeQuestionRequest = Record<string, unknown>;
 export type OpenCodeSessionStatusMap = Record<string, unknown>;
@@ -155,6 +204,7 @@ export type OpenCodeMonitorSnapshot = {
     local: unknown;
     global: unknown;
   };
+  compatibility?: OpenCodeCompatibilitySnapshot;
   openapi: OpenCodeOpenApiSnapshot;
   errors: string[];
 };
@@ -171,6 +221,7 @@ export type OpenCodeMonitorInclude =
   | 'formatter'
   | 'projects'
   | 'config'
+  | 'compatibility'
   | 'openapi';
 
 type ResearchPayload = {
@@ -1598,6 +1649,87 @@ function parseOpenApiSnapshot(document: unknown): OpenCodeOpenApiSnapshot | null
   };
 }
 
+export function assessOpenCodeCompatibility(snapshot: OpenCodeOpenApiSnapshot): OpenCodeCompatibilitySnapshot {
+  const checkedAt = new Date().toISOString();
+  const requiredRules = OPEN_CODE_COMPATIBILITY_RULES.filter((rule) => rule.required);
+  const recommendedRules = OPEN_CODE_COMPATIBILITY_RULES.filter((rule) => !rule.required);
+
+  if (snapshot.source === 'fallback') {
+    return {
+      status: 'unverified',
+      checkedAt,
+      source: snapshot.source,
+      requiredRuleCount: requiredRules.length,
+      recommendedRuleCount: recommendedRules.length,
+      missingRequiredEndpoints: [],
+      missingRecommendedEndpoints: [],
+      methodMismatches: [],
+      notes: [
+        'OpenAPI source is fallback, so compatibility checks are not verified against a live OpenCode schema.'
+      ]
+    };
+  }
+
+  const endpointMap = new Map<string, OpenCodeEndpointDefinition>();
+  for (const endpoint of snapshot.endpoints) {
+    endpointMap.set(endpoint.path, endpoint);
+  }
+
+  const missingRequiredEndpoints: string[] = [];
+  const missingRecommendedEndpoints: string[] = [];
+  const methodMismatches: OpenCodeCompatibilityMethodMismatch[] = [];
+
+  for (const rule of OPEN_CODE_COMPATIBILITY_RULES) {
+    const endpoint = endpointMap.get(rule.path);
+    if (!endpoint) {
+      if (rule.required) {
+        missingRequiredEndpoints.push(rule.path);
+      } else {
+        missingRecommendedEndpoints.push(rule.path);
+      }
+      continue;
+    }
+
+    const availableMethodSet = new Set(endpoint.methods);
+    const missingMethods = rule.methods.filter((method) => !availableMethodSet.has(method));
+    if (missingMethods.length === 0) continue;
+
+    methodMismatches.push({
+      path: rule.path,
+      requiredMethods: rule.methods,
+      availableMethods: endpoint.methods,
+      missingMethods,
+      required: rule.required
+    });
+  }
+
+  const hasRequiredIssues =
+    missingRequiredEndpoints.length > 0 || methodMismatches.some((mismatch) => mismatch.required);
+  const hasRecommendedIssues =
+    missingRecommendedEndpoints.length > 0 || methodMismatches.some((mismatch) => !mismatch.required);
+
+  const notes: string[] = [];
+  if (hasRequiredIssues) {
+    notes.push('Required compatibility checks failed; some expected OpenCode endpoints/methods are missing.');
+  } else if (hasRecommendedIssues) {
+    notes.push('Required checks passed but some recommended endpoints/methods are missing.');
+  } else {
+    notes.push('Required and recommended compatibility checks passed against the live OpenCode schema.');
+  }
+
+  return {
+    status: hasRequiredIssues ? 'fail' : hasRecommendedIssues ? 'warn' : 'pass',
+    checkedAt,
+    source: snapshot.source,
+    requiredRuleCount: requiredRules.length,
+    recommendedRuleCount: recommendedRules.length,
+    missingRequiredEndpoints: uniqueStrings(missingRequiredEndpoints),
+    missingRecommendedEndpoints: uniqueStrings(missingRecommendedEndpoints),
+    methodMismatches,
+    notes
+  };
+}
+
 export async function invokeOpenCodeEndpoint(input: {
   path: string;
   method?: string;
@@ -1785,6 +1917,7 @@ export async function getOpenCodeMonitorSnapshot(options?: {
   const includeFormatter = includeRequested('formatter', false);
   const includeProjects = includeRequested('projects', false);
   const includeConfig = includeRequested('config', false);
+  const includeCompatibility = includeRequested('compatibility', false);
   const includeOpenApi = includeRequested('openapi', true);
 
   if (ensureRunning) {
@@ -1831,7 +1964,7 @@ export async function getOpenCodeMonitorSnapshot(options?: {
     includeProjects ? invokeOpenCodeEndpoint({ path: '/project/current', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
     includeConfig ? invokeOpenCodeEndpoint({ path: '/config', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
     includeConfig ? invokeOpenCodeEndpoint({ path: '/global/config', method: 'GET' }) : Promise.resolve<OpenCodeInvocationResult | null>(null),
-    includeOpenApi ? getOpenCodeOpenApi() : Promise.resolve(fallbackOpenApiSnapshot())
+    includeOpenApi || includeCompatibility ? getOpenCodeOpenApi() : Promise.resolve(fallbackOpenApiSnapshot())
   ]);
 
   const optionalResponses = [
@@ -1892,6 +2025,9 @@ export async function getOpenCodeMonitorSnapshot(options?: {
       local: configLocal && configLocal.ok ? configLocal.data : null,
       global: configGlobal && configGlobal.ok ? configGlobal.data : null
     };
+  }
+  if (includeCompatibility) {
+    snapshot.compatibility = assessOpenCodeCompatibility(openapi);
   }
 
   return snapshot;

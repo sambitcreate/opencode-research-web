@@ -159,6 +159,26 @@ type OpenCodeOpenApiSnapshot = {
   endpoints: OpenCodeEndpointDefinition[];
 };
 
+type OpenCodeCompatibilityMethodMismatch = {
+  path: string;
+  requiredMethods: OpenCodeHttpMethod[];
+  availableMethods: OpenCodeHttpMethod[];
+  missingMethods: OpenCodeHttpMethod[];
+  required: boolean;
+};
+
+type OpenCodeCompatibilitySnapshot = {
+  status: 'pass' | 'warn' | 'fail' | 'unverified';
+  checkedAt: string;
+  source: OpenCodeOpenApiSnapshot['source'];
+  requiredRuleCount: number;
+  recommendedRuleCount: number;
+  missingRequiredEndpoints: string[];
+  missingRecommendedEndpoints: string[];
+  methodMismatches: OpenCodeCompatibilityMethodMismatch[];
+  notes: string[];
+};
+
 type OpenCodeFilesMode = 'findText' | 'findFile' | 'list' | 'content' | 'status';
 
 type OpenCodeFilesResponse = {
@@ -215,6 +235,7 @@ type OpenCodeMonitorSnapshot = {
     local: unknown;
     global: unknown;
   };
+  compatibility?: OpenCodeCompatibilitySnapshot;
   openapi: OpenCodeOpenApiSnapshot;
   errors: string[];
 };
@@ -1953,7 +1974,20 @@ export default function OpenCodeMonitorPage() {
       const snapshot = await fetchOpenCodeMonitorSnapshot<OpenCodeMonitorSnapshot>({
         sessionLimit: 120,
         autostart: false,
-        include: ['providers', 'agents', 'skills', 'commands', 'path', 'vcs', 'mcp', 'lsp', 'formatter', 'config', 'openapi']
+        include: [
+          'providers',
+          'agents',
+          'skills',
+          'commands',
+          'path',
+          'vcs',
+          'mcp',
+          'lsp',
+          'formatter',
+          'config',
+          'compatibility',
+          'openapi'
+        ]
       });
       setMonitor(snapshot);
       setEngine(snapshot.status);
@@ -2280,6 +2314,29 @@ export default function OpenCodeMonitorPage() {
       pluginCount: pluginCandidates.length
     };
   }, [monitor?.config?.global, monitor?.config?.local]);
+  const compatibilitySummary = useMemo(() => {
+    const report = monitor?.compatibility;
+    if (!report) {
+      return {
+        status: 'unverified' as const,
+        requiredIssues: 0,
+        recommendedIssues: 0,
+        mismatchCount: 0,
+        note: 'compatibility report not requested'
+      };
+    }
+
+    const requiredMismatches = report.methodMismatches.filter((mismatch) => mismatch.required).length;
+    const recommendedMismatches = report.methodMismatches.filter((mismatch) => !mismatch.required).length;
+
+    return {
+      status: report.status,
+      requiredIssues: report.missingRequiredEndpoints.length + requiredMismatches,
+      recommendedIssues: report.missingRecommendedEndpoints.length + recommendedMismatches,
+      mismatchCount: report.methodMismatches.length,
+      note: report.notes[0] ?? ''
+    };
+  }, [monitor?.compatibility]);
 
   const agentCandidates = useMemo(() => {
     const values = collectStringFields(monitor?.agents, ['id', 'name', 'slug', 'title', 'agentID']);
@@ -4177,7 +4234,7 @@ export default function OpenCodeMonitorPage() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2 text-[11px]">
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
                   <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-2.5">
                     <p className="oc-kicker">LSP</p>
                     <p className="oc-mono mt-1 text-[var(--text-strong)]">
@@ -4207,7 +4264,28 @@ export default function OpenCodeMonitorPage() {
                     </p>
                     <p className="mt-1 text-[var(--text-weaker)]">{configSummary.pluginCount} plugin/config labels</p>
                   </div>
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-2.5">
+                    <p className="oc-kicker">Compatibility</p>
+                    <p className="oc-mono mt-1 text-[var(--text-strong)]">
+                      {compatibilitySummary.status}
+                      {compatibilitySummary.mismatchCount > 0 ? ` · ${compatibilitySummary.mismatchCount} mismatches` : ''}
+                    </p>
+                    <p className="text-[var(--text-weaker)]">
+                      req {compatibilitySummary.requiredIssues} · rec {compatibilitySummary.recommendedIssues}
+                    </p>
+                  </div>
                 </div>
+
+                {monitor?.compatibility && (
+                  <details className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                    <summary className="cursor-pointer text-[12px] font-medium text-[var(--text-strong)]">
+                      API compatibility report
+                    </summary>
+                    <pre className="oc-scroll oc-mono mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                      {prettyJson(monitor.compatibility)}
+                    </pre>
+                  </details>
+                )}
 
                 {(monitorError || engine?.lastError) && (
                   <div className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-3 text-[var(--critical)]">
