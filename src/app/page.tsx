@@ -177,6 +177,12 @@ type OpenCodeMonitorSnapshot = {
   pathInfo: unknown;
   vcsInfo: unknown;
   mcp?: unknown;
+  lsp?: unknown;
+  formatter?: unknown;
+  config?: {
+    local: unknown;
+    global: unknown;
+  };
   openapi: OpenCodeOpenApiSnapshot;
   errors: string[];
 };
@@ -1123,6 +1129,101 @@ function toStringList(value: unknown): string[] {
   return [];
 }
 
+function findFirstString(value: unknown, keys: string[], depth = 0): string | null {
+  if (!value || depth > 4) return null;
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const direct = extractString(record, keys);
+  if (direct) return direct;
+
+  for (const nested of Object.values(record)) {
+    if (!nested || typeof nested !== 'object') continue;
+    const found = findFirstString(nested, keys, depth + 1);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+function findFirstStringArray(value: unknown, keys: string[], depth = 0): string[] {
+  if (!value || depth > 4) return [];
+  const record = asRecord(value);
+  if (!record) return [];
+
+  for (const key of keys) {
+    const candidate = record[key];
+    if (Array.isArray(candidate)) {
+      const values = candidate.filter((item): item is string => typeof item === 'string');
+      if (values.length > 0) return values;
+    }
+  }
+
+  for (const nested of Object.values(record)) {
+    if (!nested || typeof nested !== 'object') continue;
+    const values = findFirstStringArray(nested, keys, depth + 1);
+    if (values.length > 0) return values;
+  }
+
+  return [];
+}
+
+function summarizeRuntimeService(value: unknown): { entries: number; active: number | null; sampleStatuses: string[] } {
+  const records = collectRecords(value);
+  if (records.length === 0) {
+    return { entries: 0, active: null, sampleStatuses: [] };
+  }
+
+  const statuses = toUniqueStrings(
+    collectStringFields(value, ['status', 'state', 'mode', 'phase', 'health']).filter((entry) => entry.length <= 40),
+    8
+  );
+  let activeCount = 0;
+  let observedBoolean = false;
+  for (const record of records) {
+    const flags = [record.running, record.connected, record.active, record.enabled];
+    for (const flag of flags) {
+      if (typeof flag === 'boolean') {
+        observedBoolean = true;
+        if (flag) activeCount += 1;
+        break;
+      }
+    }
+  }
+
+  return {
+    entries: records.length,
+    active: observedBoolean ? activeCount : null,
+    sampleStatuses: statuses
+  };
+}
+
+function summarizePermissionContext(value: unknown): {
+  sessionId: string | null;
+  tool: string | null;
+  command: string | null;
+  prompt: string | null;
+} {
+  return {
+    sessionId: findFirstString(value, ['sessionID', 'sessionId', 'session_id']),
+    tool: findFirstString(value, ['tool', 'toolName']),
+    command: findFirstString(value, ['command', 'action', 'path']),
+    prompt: findFirstString(value, ['prompt', 'reason', 'message', 'title'])
+  };
+}
+
+function summarizeQuestionContext(value: unknown): {
+  sessionId: string | null;
+  title: string | null;
+  options: string[];
+} {
+  return {
+    sessionId: findFirstString(value, ['sessionID', 'sessionId', 'session_id']),
+    title: findFirstString(value, ['question', 'prompt', 'title', 'message', 'text']),
+    options: toUniqueStrings(findFirstStringArray(value, ['options', 'choices', 'answers']), 12)
+  };
+}
+
 function mergeModelOptions(models: ModelOption[]): ModelOption[] {
   const map = new Map<string, ModelOption>();
 
@@ -1713,7 +1814,7 @@ export default function OpenCodeMonitorPage() {
 
     try {
       const response = await fetch(
-        '/api/opencode/monitor?sessionLimit=120&autostart=0&include=providers,agents,skills,commands,path,vcs,mcp,openapi',
+        '/api/opencode/monitor?sessionLimit=120&autostart=0&include=providers,agents,skills,commands,path,vcs,mcp,lsp,formatter,config,openapi',
         { cache: 'no-store' }
       );
       const payload = (await response.json()) as OpenCodeMonitorSnapshot | { error?: string };
@@ -2032,6 +2133,24 @@ export default function OpenCodeMonitorPage() {
   const todoSummary = useMemo(() => summarizeTodoItems(sessionDetail?.todo), [sessionDetail?.todo]);
   const diffSummary = useMemo(() => summarizeDiff(sessionDetail?.diff), [sessionDetail?.diff]);
   const usageSummary = useMemo(() => summarizeSessionUsage(selectedSessionStatus), [selectedSessionStatus]);
+  const lspSummary = useMemo(() => summarizeRuntimeService(monitor?.lsp), [monitor?.lsp]);
+  const formatterSummary = useMemo(() => summarizeRuntimeService(monitor?.formatter), [monitor?.formatter]);
+  const configSummary = useMemo(() => {
+    const local = monitor?.config?.local;
+    const global = monitor?.config?.global;
+    const pluginCandidates = toUniqueStrings(
+      [
+        ...collectStringFields(local, ['plugin', 'plugins', 'name', 'id']),
+        ...collectStringFields(global, ['plugin', 'plugins', 'name', 'id'])
+      ].filter((entry) => entry.length <= 80),
+      24
+    );
+    return {
+      hasLocal: local !== undefined && local !== null,
+      hasGlobal: global !== undefined && global !== null,
+      pluginCount: pluginCandidates.length
+    };
+  }, [monitor?.config?.global, monitor?.config?.local]);
 
   const agentCandidates = useMemo(() => {
     const values = collectStringFields(monitor?.agents, ['id', 'name', 'slug', 'title', 'agentID']);
@@ -3801,6 +3920,38 @@ export default function OpenCodeMonitorPage() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-3 gap-2 text-[11px]">
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-2.5">
+                    <p className="oc-kicker">LSP</p>
+                    <p className="oc-mono mt-1 text-[var(--text-strong)]">
+                      {lspSummary.entries} entries
+                      {lspSummary.active !== null ? ` · ${lspSummary.active} active` : ''}
+                    </p>
+                    {lspSummary.sampleStatuses.length > 0 && (
+                      <p className="mt-1 text-[var(--text-weaker)]">{lspSummary.sampleStatuses.slice(0, 2).join(', ')}</p>
+                    )}
+                  </div>
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-2.5">
+                    <p className="oc-kicker">Formatter</p>
+                    <p className="oc-mono mt-1 text-[var(--text-strong)]">
+                      {formatterSummary.entries} entries
+                      {formatterSummary.active !== null ? ` · ${formatterSummary.active} active` : ''}
+                    </p>
+                    {formatterSummary.sampleStatuses.length > 0 && (
+                      <p className="mt-1 text-[var(--text-weaker)]">
+                        {formatterSummary.sampleStatuses.slice(0, 2).join(', ')}
+                      </p>
+                    )}
+                  </div>
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-2.5">
+                    <p className="oc-kicker">Config</p>
+                    <p className="oc-mono mt-1 text-[var(--text-strong)]">
+                      {configSummary.hasLocal ? 'local' : 'no-local'} · {configSummary.hasGlobal ? 'global' : 'no-global'}
+                    </p>
+                    <p className="mt-1 text-[var(--text-weaker)]">{configSummary.pluginCount} plugin/config labels</p>
+                  </div>
+                </div>
+
                 {(monitorError || engine?.lastError) && (
                   <div className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-3 text-[var(--critical)]">
                     <p className="mb-1 flex items-center gap-1.5 font-medium">
@@ -4713,9 +4864,20 @@ export default function OpenCodeMonitorPage() {
 
                 {permissions.map((request, index) => {
                   const requestId = extractIdentifier(request) || `permission-${index + 1}`;
+                  const context = summarizePermissionContext(request);
                   return (
                     <div key={requestId} className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
                       <p className="oc-mono text-[11px] text-[var(--text-weak)]">{requestId}</p>
+                      <div className="mt-2 grid gap-1 text-[11px] text-[var(--text-weaker)] sm:grid-cols-2">
+                        <p>session: {context.sessionId || 'n/a'}</p>
+                        <p>tool: {context.tool || 'n/a'}</p>
+                        <p className="sm:col-span-2">command/path: {context.command || 'n/a'}</p>
+                        {context.prompt && (
+                          <p className="sm:col-span-2 rounded-md border border-[var(--border-weak)] bg-[var(--surface-raised)] px-2 py-1 text-[var(--text-base)]">
+                            {context.prompt}
+                          </p>
+                        )}
+                      </div>
                       <Input
                         value={permissionMessages[requestId] || ''}
                         onChange={(event) =>
@@ -4778,9 +4940,25 @@ export default function OpenCodeMonitorPage() {
 
                 {questions.map((request, index) => {
                   const requestId = extractIdentifier(request) || `question-${index + 1}`;
+                  const context = summarizeQuestionContext(request);
                   return (
                     <div key={requestId} className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
                       <p className="oc-mono text-[11px] text-[var(--text-weak)]">{requestId}</p>
+                      <div className="mt-2 space-y-1 text-[11px] text-[var(--text-weaker)]">
+                        <p>session: {context.sessionId || 'n/a'}</p>
+                        {context.title && (
+                          <p className="rounded-md border border-[var(--border-weak)] bg-[var(--surface-raised)] px-2 py-1 text-[var(--text-base)]">
+                            {context.title}
+                          </p>
+                        )}
+                        {context.options.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {context.options.slice(0, 8).map((option) => (
+                              <Badge key={`${requestId}-${option}`}>{option}</Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                       <Textarea
                         value={questionReplies[requestId] || '{"answers": []}'}
                         onChange={(event) =>

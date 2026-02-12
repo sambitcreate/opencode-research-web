@@ -25,6 +25,8 @@ Local-first OpenCode control plane for monitoring and executing OpenCode operati
   - project module for list/current snapshots and `POST /project/current` update actions,
   - worktree module for `/experimental/worktree` list/create/remove/reset operations,
   - config editor for `/config` and `/global/config` drafts with diff/confirm apply flow,
+  - richer permission/question queue context (session/tool/command/question/options hints),
+  - expanded engine status summaries for LSP, formatter, and config/plugin signals,
   - session operation runner (fork/revert/share/summarize/delete/etc),
   - permission and question response queues,
   - TUI command shortcuts (`/tui/*` routes),

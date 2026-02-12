@@ -129,8 +129,8 @@ Last updated: February 11, 2026
 - [x] Add project list/current/update module.
 - [x] Add worktree create/list/remove/reset module.
 - [x] Add config editor for local + global config with diff/confirm.
-- [ ] Improve permission/question UI with richer typed context.
-- [ ] Expand status panel for LSP + formatter + plugin/config summaries.
+- [x] Improve permission/question UI with richer typed context.
+- [x] Expand status panel for LSP + formatter + plugin/config summaries.
 
 ## P3 (Could) - PTY Terminal + Command Palette
 
@@ -234,3 +234,6 @@ Last updated: February 11, 2026
 - [x] 2026-02-11: Added local/global config editor UI module:
   - New Config Editor panel with local and global JSON drafts
   - Includes line-change diff indicators and explicit confirm-before-apply flow
+- [x] 2026-02-11: Improved permission/question and runtime status diagnostics:
+  - Added typed context summaries in permission/question queues (session/tool/command/prompt/options hints)
+  - Expanded engine snapshot with LSP, formatter, and config/plugin summary tiles
