@@ -125,7 +125,7 @@ Last updated: February 11, 2026
 - [x] Extend `GET /api/opencode/openapi` with route metadata transform for UI form generation.
 
 ### UI
-- [ ] Add file explorer/search/read/status module.
+- [x] Add file explorer/search/read/status module.
 - [ ] Add project list/current/update module.
 - [ ] Add worktree create/list/remove/reset module.
 - [ ] Add config editor for local + global config with diff/confirm.
@@ -222,3 +222,6 @@ Last updated: February 11, 2026
 - [x] 2026-02-11: Extended `/api/opencode/openapi` with form metadata transform:
   - Adds additive `routeMetadata` entries (path params, query hints, per-method body requirement/templates)
   - Adds additive `metadata` envelope for generated timestamp and route metadata count
+- [x] 2026-02-11: Added file explorer/search/read/status UI module:
+  - New File Explorer panel in dashboard backed by `/api/opencode/files`
+  - Supports `findText`, `findFile`, `list`, `content`, and `status` with optional extra query params

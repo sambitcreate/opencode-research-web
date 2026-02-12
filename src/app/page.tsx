@@ -146,6 +146,17 @@ type OpenCodeOpenApiSnapshot = {
   endpoints: OpenCodeEndpointDefinition[];
 };
 
+type OpenCodeFilesMode = 'findText' | 'findFile' | 'list' | 'content' | 'status';
+
+type OpenCodeFilesResponse = {
+  mode: OpenCodeFilesMode;
+  request: {
+    path: string;
+    method: 'GET';
+  };
+  result: OpenCodeControlResponse;
+};
+
 type OpenCodeMonitorSnapshot = {
   status: OpenCodeStatus;
   sessions: OpenCodeSessionsResponse;
@@ -863,6 +874,14 @@ const COMPOSER_SLASH_OPTIONS: Array<{
   { id: 'slash-shell', label: '/shell', detail: 'Switch to shell mode', mode: 'shell' }
 ];
 
+const FILE_MODE_OPTIONS: Array<{ mode: OpenCodeFilesMode; label: string; description: string }> = [
+  { mode: 'findText', label: 'Find Text', description: 'Text search via /find' },
+  { mode: 'findFile', label: 'Find File', description: 'File search via /find/file' },
+  { mode: 'list', label: 'List Files', description: 'Directory listing via /file' },
+  { mode: 'content', label: 'Read Content', description: 'File content via /file/content' },
+  { mode: 'status', label: 'File Status', description: 'Status checks via /file/status' }
+];
+
 function toUniqueStrings(values: string[], limit = 120): string[] {
   const seen = new Set<string>();
   const next: string[] = [];
@@ -991,6 +1010,17 @@ function extractComposerToken(value: string, caretPosition: number): ComposerTok
     start: safeCaret - raw.length,
     end: safeCaret
   };
+}
+
+function appendRawQueryParams(params: URLSearchParams, raw: string): void {
+  const trimmed = raw.trim();
+  if (!trimmed) return;
+  const normalized = trimmed.startsWith('?') ? trimmed.slice(1) : trimmed;
+  const extra = new URLSearchParams(normalized);
+  for (const [key, value] of extra.entries()) {
+    if (!key.trim()) continue;
+    params.set(key, value);
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -1564,6 +1594,15 @@ export default function OpenCodeMonitorPage() {
   const [apiResponse, setApiResponse] = useState<OpenCodeControlResponse | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [isApiRunning, setIsApiRunning] = useState(false);
+
+  const [fileMode, setFileMode] = useState<OpenCodeFilesMode>('findText');
+  const [fileRoot, setFileRoot] = useState('');
+  const [filePathTarget, setFilePathTarget] = useState('');
+  const [fileQuery, setFileQuery] = useState('');
+  const [fileExtraParams, setFileExtraParams] = useState('');
+  const [fileResponse, setFileResponse] = useState<OpenCodeFilesResponse | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [isFileRunning, setIsFileRunning] = useState(false);
 
   const [themeId, setThemeId] = useState<string>('oc-1');
   const [colorScheme, setColorScheme] = useState<ColorScheme>('system');
@@ -2227,6 +2266,13 @@ export default function OpenCodeMonitorPage() {
     if (!selectedEndpoint || selectedEndpoint.methods.length === 0) return DEFAULT_API_METHODS;
     return selectedEndpoint.methods;
   }, [selectedEndpoint]);
+
+  const selectedFileMode = useMemo(() => {
+    return FILE_MODE_OPTIONS.find((option) => option.mode === fileMode) ?? FILE_MODE_OPTIONS[0];
+  }, [fileMode]);
+
+  const fileModeUsesQuery = fileMode === 'findText' || fileMode === 'findFile';
+  const fileModeUsesPath = fileMode === 'list' || fileMode === 'content' || fileMode === 'status';
 
   useEffect(() => {
     if (!selectedApiMethods.includes(apiMethod)) {
@@ -3197,6 +3243,66 @@ export default function OpenCodeMonitorPage() {
     }
   };
 
+  const handleRunFileRequest = async () => {
+    setIsFileRunning(true);
+    setFileError(null);
+    setEngineState('booting');
+
+    try {
+      const params = new URLSearchParams();
+      params.set('mode', fileMode);
+      params.set('autostart', '1');
+
+      const trimmedRoot = fileRoot.trim();
+      const trimmedPath = filePathTarget.trim();
+      const trimmedQuery = fileQuery.trim();
+
+      if (trimmedRoot) {
+        params.set('root', trimmedRoot);
+      }
+
+      if (fileModeUsesQuery && trimmedQuery) {
+        params.set('q', trimmedQuery);
+        params.set('query', trimmedQuery);
+      }
+
+      if (fileModeUsesPath) {
+        const resolvedPath = trimmedPath || trimmedRoot;
+        if (resolvedPath) {
+          params.set('path', resolvedPath);
+        }
+      } else if (fileModeUsesQuery && trimmedRoot) {
+        params.set('path', trimmedRoot);
+      }
+
+      appendRawQueryParams(params, fileExtraParams);
+
+      const response = await fetch(`/api/opencode/files?${params.toString()}`, {
+        cache: 'no-store'
+      });
+      const payload = (await response.json()) as OpenCodeFilesResponse | { error?: string };
+      if (!response.ok) {
+        throw new Error((payload as { error?: string }).error || 'Files request failed.');
+      }
+
+      const parsed = payload as OpenCodeFilesResponse;
+      setFileResponse(parsed);
+      if (!parsed.result.ok) {
+        setFileError(parsed.result.text || `Request failed (${parsed.result.status}).`);
+        setEngineState('error');
+      } else {
+        setEngineState('ready');
+      }
+
+      await refreshMonitor({ silent: true });
+    } catch (error) {
+      setFileError(error instanceof Error ? error.message : 'Unable to run files request.');
+      setEngineState('error');
+    } finally {
+      setIsFileRunning(false);
+    }
+  };
+
   return (
     <div className="oc-app min-h-screen" style={themeStyle}>
       <div className="mx-auto w-full max-w-[1540px] px-4 py-5 md:px-6 md:py-7">
@@ -3372,6 +3478,86 @@ export default function OpenCodeMonitorPage() {
                       {engine.recentLogs.join('\n')}
                     </pre>
                   </details>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="oc-panel">
+              <CardHeader className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <FileCode2 className="h-4 w-4 text-[var(--accent)]" />
+                    File Explorer
+                  </CardTitle>
+                  <Badge>{selectedFileMode?.description || 'file tools'}</Badge>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <select
+                    value={fileMode}
+                    onChange={(event) => setFileMode(event.target.value as OpenCodeFilesMode)}
+                    className="h-9 rounded-lg border border-[var(--border-base)] bg-[var(--surface-raised)] px-3 text-[12px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-selected)]/60"
+                  >
+                    {FILE_MODE_OPTIONS.map((option) => (
+                      <option key={option.mode} value={option.mode}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <Input
+                    value={fileRoot}
+                    onChange={(event) => setFileRoot(event.target.value)}
+                    placeholder="Search/list root path (optional)"
+                    className="oc-mono text-[11px]"
+                  />
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {fileModeUsesQuery && (
+                  <Input
+                    value={fileQuery}
+                    onChange={(event) => setFileQuery(event.target.value)}
+                    placeholder={fileMode === 'findText' ? 'Text to search for' : 'Filename/glob to search for'}
+                    className="oc-mono text-[11px]"
+                  />
+                )}
+
+                {fileModeUsesPath && (
+                  <Input
+                    value={filePathTarget}
+                    onChange={(event) => setFilePathTarget(event.target.value)}
+                    placeholder={fileMode === 'content' ? 'Exact file path' : 'Target directory/file path'}
+                    className="oc-mono text-[11px]"
+                  />
+                )}
+
+                <Input
+                  value={fileExtraParams}
+                  onChange={(event) => setFileExtraParams(event.target.value)}
+                  placeholder='Extra query params (example: "limit=100&ignore=.git")'
+                  className="oc-mono text-[11px]"
+                />
+
+                <Button variant="default" onClick={handleRunFileRequest} disabled={isFileRunning}>
+                  {isFileRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                  Run File Request
+                </Button>
+
+                {fileError && (
+                  <div className="rounded-lg border border-[var(--critical-border)] bg-[var(--critical-soft)] p-3 text-[12px] text-[var(--critical)]">
+                    {fileError}
+                  </div>
+                )}
+
+                {fileResponse && (
+                  <div className="rounded-lg border border-[var(--border-weak)] bg-[var(--surface-base)] p-3">
+                    <p className="oc-mono text-[11px] text-[var(--text-weak)]">
+                      {fileResponse.mode} · {fileResponse.request.path} · {fileResponse.result.status}
+                    </p>
+                    <pre className="oc-scroll oc-mono mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap text-[11px] text-[var(--text-weak)]">
+                      {prettyJson(fileResponse.result.data ?? fileResponse.result.text)}
+                    </pre>
+                  </div>
                 )}
               </CardContent>
             </Card>
