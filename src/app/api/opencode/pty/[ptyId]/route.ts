@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { invokeOpenCodeEndpoint } from '@/lib/opencode';
+import { parseAutostartParam } from '@/lib/opencode-route-utils';
 
 export const runtime = 'nodejs';
 
@@ -8,11 +9,6 @@ type RouteContext = {
     ptyId: string;
   }>;
 };
-
-function parseAutostart(searchParams: URLSearchParams): boolean {
-  const value = searchParams.get('autostart')?.trim().toLowerCase();
-  return value === '1' || value === 'true';
-}
 
 async function parseJsonBody(request: NextRequest): Promise<unknown> {
   const text = await request.text();
@@ -36,7 +32,7 @@ async function resolvePtyId(context: RouteContext): Promise<string> {
 export async function PATCH(request: NextRequest, context: RouteContext) {
   try {
     const searchParams = new URL(request.url).searchParams;
-    const autostart = parseAutostart(searchParams);
+    const autostart = parseAutostartParam(searchParams);
     const ptyId = await resolvePtyId(context);
     const body = await parseJsonBody(request);
     const path = `/pty/${encodeURIComponent(ptyId)}`;
@@ -89,7 +85,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 export async function DELETE(request: NextRequest, context: RouteContext) {
   try {
     const searchParams = new URL(request.url).searchParams;
-    const autostart = parseAutostart(searchParams);
+    const autostart = parseAutostartParam(searchParams);
     const ptyId = await resolvePtyId(context);
     const path = `/pty/${encodeURIComponent(ptyId)}`;
 

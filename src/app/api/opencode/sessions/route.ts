@@ -5,6 +5,7 @@ import {
   getOpenCodeStatus,
   type OpenCodeSessionDetailInclude
 } from '@/lib/opencode';
+import { parseAutostartParam, parseOptionalBooleanParam } from '@/lib/opencode-route-utils';
 
 export const runtime = 'nodejs';
 
@@ -13,14 +14,6 @@ function parsePositiveInteger(value: string | null, fallback: number): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return parsed;
-}
-
-function parseBoolean(value: string | null): boolean | undefined {
-  if (typeof value !== 'string') return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === '1' || normalized === 'true') return true;
-  if (normalized === '0' || normalized === 'false') return false;
-  return undefined;
 }
 
 function parseIncludes(value: string | null): OpenCodeSessionDetailInclude[] {
@@ -37,11 +30,11 @@ export async function GET(request: NextRequest) {
   const searchParams = new URL(request.url).searchParams;
   const sessionId = searchParams.get('sessionId')?.trim() || '';
   try {
-    const autostart = searchParams.get('autostart') === '1';
+    const autostart = parseAutostartParam(searchParams);
     const limitParam = searchParams.get('limit');
     const limit = parsePositiveInteger(limitParam, 40);
     const messageLimit = parsePositiveInteger(searchParams.get('messageLimit'), 120);
-    const roots = parseBoolean(searchParams.get('roots'));
+    const roots = parseOptionalBooleanParam(searchParams.get('roots'));
     const start = searchParams.get('start')?.trim() || '';
     const search = searchParams.get('search')?.trim() || '';
     const includes = parseIncludes(searchParams.get('include'));

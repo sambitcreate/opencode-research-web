@@ -5,6 +5,7 @@ import {
   parseOpenCodeSseBlock,
   type OpenCodeSseSource
 } from '@/lib/opencode';
+import { parseAutostartParam } from '@/lib/opencode-route-utils';
 
 export const runtime = 'nodejs';
 
@@ -37,7 +38,7 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = new URL(request.url).searchParams;
     const scope = parseEventScope(searchParams.get('scope'));
-    const autostart = searchParams.get('autostart') === '1';
+    const autostart = parseAutostartParam(searchParams);
     const sources = resolveSources(scope);
 
     if (autostart) {

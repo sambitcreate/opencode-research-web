@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { invokeOpenCodeEndpoint } from '@/lib/opencode';
+import { parseAutostartParam } from '@/lib/opencode-route-utils';
 
 export const runtime = 'nodejs';
 
@@ -8,11 +9,6 @@ type RouteContext = {
     ptyId: string;
   }>;
 };
-
-function parseAutostart(searchParams: URLSearchParams): boolean {
-  const value = searchParams.get('autostart')?.trim().toLowerCase();
-  return value === '1' || value === 'true';
-}
 
 function inferLikelyUpgrade(result: {
   status: number;
@@ -29,7 +25,7 @@ function inferLikelyUpgrade(result: {
 export async function GET(request: NextRequest, context: RouteContext) {
   try {
     const searchParams = new URL(request.url).searchParams;
-    const autostart = parseAutostart(searchParams);
+    const autostart = parseAutostartParam(searchParams);
     const params = await context.params;
     const ptyId = decodeURIComponent(params.ptyId || '').trim();
 

@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { getOpenCodeSessionTranscript } from '@/lib/opencode';
+import { parseAutostartParam, parseBooleanParam } from '@/lib/opencode-route-utils';
 
 export const runtime = 'nodejs';
 
@@ -9,18 +10,13 @@ type RouteContext = {
   }>;
 };
 
-function parseBooleanFlag(value: string | null): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === '1' || normalized === 'true';
-}
-
 export async function GET(request: NextRequest, context: RouteContext) {
   try {
     const searchParams = new URL(request.url).searchParams;
-    const autostart = parseBooleanFlag(searchParams.get('autostart'));
-    const thinking = parseBooleanFlag(searchParams.get('thinking'));
-    const toolDetails = parseBooleanFlag(searchParams.get('toolDetails'));
-    const assistantMetadata = parseBooleanFlag(searchParams.get('assistantMetadata'));
+    const autostart = parseAutostartParam(searchParams);
+    const thinking = parseBooleanParam(searchParams.get('thinking'));
+    const toolDetails = parseBooleanParam(searchParams.get('toolDetails'));
+    const assistantMetadata = parseBooleanParam(searchParams.get('assistantMetadata'));
     const params = await context.params;
     const sessionId = decodeURIComponent(params.sessionId || '').trim();
 

@@ -1,12 +1,8 @@
 import type { NextRequest } from 'next/server';
 import { invokeOpenCodeEndpoint } from '@/lib/opencode';
+import { parseAutostartParam } from '@/lib/opencode-route-utils';
 
 export const runtime = 'nodejs';
-
-function parseAutostart(searchParams: URLSearchParams): boolean {
-  const value = searchParams.get('autostart')?.trim().toLowerCase();
-  return value === '1' || value === 'true';
-}
 
 async function parseJsonBody(request: NextRequest): Promise<unknown> {
   const text = await request.text();
@@ -21,7 +17,7 @@ async function parseJsonBody(request: NextRequest): Promise<unknown> {
 export async function GET(request: NextRequest) {
   try {
     const searchParams = new URL(request.url).searchParams;
-    const autostart = parseAutostart(searchParams);
+    const autostart = parseAutostartParam(searchParams);
     const result = await invokeOpenCodeEndpoint({
       path: '/pty',
       method: 'GET',
@@ -51,7 +47,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const searchParams = new URL(request.url).searchParams;
-    const autostart = parseAutostart(searchParams);
+    const autostart = parseAutostartParam(searchParams);
     const body = await parseJsonBody(request);
 
     const result = await invokeOpenCodeEndpoint({

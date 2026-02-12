@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { invokeOpenCodeEndpoint } from '@/lib/opencode';
+import { parseAutostartParam } from '@/lib/opencode-route-utils';
 
 export const runtime = 'nodejs';
 
@@ -44,7 +45,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const autostart = searchParams.get('autostart') === '1';
+    const autostart = parseAutostartParam(searchParams);
     const path = buildForwardPath(modeRaw, searchParams);
 
     const result = await invokeOpenCodeEndpoint({

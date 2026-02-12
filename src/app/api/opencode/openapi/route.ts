@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { getOpenCodeOpenApi } from '@/lib/opencode';
+import { parseAutostartParam } from '@/lib/opencode-route-utils';
 
 export const runtime = 'nodejs';
 
@@ -159,7 +160,7 @@ function buildRouteMetadata(endpoints: OpenCodeEndpointDefinition[]): OpenCodeRo
 export async function GET(request: NextRequest) {
   try {
     const searchParams = new URL(request.url).searchParams;
-    const autostart = searchParams.get('autostart') === '1';
+    const autostart = parseAutostartParam(searchParams);
     const snapshot = await getOpenCodeOpenApi({ ensureRunning: autostart });
     const routeMetadata = buildRouteMetadata(snapshot.endpoints);
 

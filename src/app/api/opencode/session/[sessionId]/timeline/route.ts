@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { getOpenCodeSessionTimeline } from '@/lib/opencode';
+import { parseAutostartParam } from '@/lib/opencode-route-utils';
 
 export const runtime = 'nodejs';
 
@@ -12,7 +13,7 @@ type RouteContext = {
 export async function GET(request: NextRequest, context: RouteContext) {
   try {
     const searchParams = new URL(request.url).searchParams;
-    const autostart = searchParams.get('autostart') === '1';
+    const autostart = parseAutostartParam(searchParams);
     const params = await context.params;
     const sessionId = decodeURIComponent(params.sessionId || '').trim();
 
