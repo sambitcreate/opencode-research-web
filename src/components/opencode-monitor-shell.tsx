@@ -48,10 +48,10 @@ import {
   fetchOpenCodeSystemSnapshot,
   updateOpenCodePty
 } from '@/lib/opencode-api-client';
+import { createOpenCodeDebugEvent, useOpenCodeMonitorStore } from '@/lib/opencode-monitor/store';
 import { cn } from '@/lib/utils';
 import * as monitorPageShared from '@/lib/opencode-monitor-page-shared';
 import type {
-  OpenCodeStatus,
   OpenCodeSessionMessage,
   OpenCodeSessionDetail,
   OpenCodeSessionTimeline,
@@ -63,12 +63,9 @@ import type {
   OpenCodePtyRouteResponse,
   OpenCodeMonitorSnapshot,
   OpenCodeControlResponse,
-  EventConnectionState,
   PtyStreamState,
-  OpenCodeDebugEvent,
   ColorScheme,
   ResolvedScheme,
-  EngineState,
   ComposerMode,
   ComposerMentionCategory,
   ComposerSuggestion,
@@ -80,7 +77,6 @@ const {
   EMPTY_SESSIONS,
   EMPTY_OPENAPI_ENDPOINTS,
   DEFAULT_API_METHODS,
-  DEBUG_EVENT_LIMIT,
   MONITOR_POLL_MS_DISCONNECTED,
   MONITOR_POLL_MS_CONNECTED,
   SESSION_POLL_MS_DISCONNECTED,
@@ -143,20 +139,43 @@ type OpenCodeMonitorShellProps = {
 
 export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMonitorShellProps) {
   const isSettingsView = mode === 'settings';
-  const [monitor, setMonitor] = useState<OpenCodeMonitorSnapshot | null>(null);
-  const [engine, setEngine] = useState<OpenCodeStatus | null>(null);
-  const [engineState, setEngineState] = useState<EngineState>('checking');
-  const [monitorError, setMonitorError] = useState<string | null>(null);
-  const [isMonitorLoading, setIsMonitorLoading] = useState(false);
-
-  const [sessionDetail, setSessionDetail] = useState<OpenCodeSessionDetail | null>(null);
-  const [sessionTimeline, setSessionTimeline] = useState<OpenCodeSessionTimeline | null>(null);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [isSessionDetailLoading, setIsSessionDetailLoading] = useState(false);
-  const [sessionError, setSessionError] = useState<string | null>(null);
-  const [sessionSearch, setSessionSearch] = useState('');
-  const [isTimelineLoading, setIsTimelineLoading] = useState(false);
-  const [timelineError, setTimelineError] = useState<string | null>(null);
+  const {
+    state: monitorStore,
+    setEngineState,
+    setMonitorError,
+    setIsMonitorLoading,
+    setSessionDetail,
+    setSessionTimeline,
+    setActiveSessionId,
+    setIsSessionDetailLoading,
+    setSessionError,
+    setSessionSearch,
+    setIsTimelineLoading,
+    setTimelineError,
+    setEventDebugFilter,
+    setEventDebugEvents,
+    applyMonitorSnapshot,
+    applyEventUpdate
+  } = useOpenCodeMonitorStore();
+  const {
+    monitor,
+    engine,
+    engineState,
+    monitorError,
+    isMonitorLoading,
+    sessionDetail,
+    sessionTimeline,
+    activeSessionId,
+    isSessionDetailLoading,
+    sessionError,
+    sessionSearch,
+    isTimelineLoading,
+    timelineError,
+    eventConnectionState,
+    eventConnectionError,
+    eventDebugFilter,
+    eventDebugEvents
+  } = monitorStore;
 
   const [newSessionTitle, setNewSessionTitle] = useState('');
   const [newSessionParent, setNewSessionParent] = useState('');
@@ -254,10 +273,6 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
   const [themeId, setThemeId] = useState<string>('oc-1');
   const [colorScheme, setColorScheme] = useState<ColorScheme>('system');
   const [systemPrefersDark, setSystemPrefersDark] = useState(true);
-  const [eventConnectionState, setEventConnectionState] = useState<EventConnectionState>('connecting');
-  const [eventConnectionError, setEventConnectionError] = useState<string | null>(null);
-  const [eventDebugFilter, setEventDebugFilter] = useState<'all' | 'instance' | 'global' | 'bridge'>('all');
-  const [eventDebugEvents, setEventDebugEvents] = useState<OpenCodeDebugEvent[]>([]);
   const [isTranscriptRunning, setIsTranscriptRunning] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
@@ -337,21 +352,14 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
           'openapi'
         ]
       });
-      setMonitor(snapshot);
-      setEngine(snapshot.status);
-      setMonitorError(null);
-      setEngineState(snapshot.status.running ? 'ready' : 'offline');
-      setActiveSessionId((current) => {
-        if (current && snapshot.sessions.sessions.some((session) => session.id === current)) return current;
-        return snapshot.sessions.sessions[0]?.id || null;
-      });
+      applyMonitorSnapshot(snapshot);
     } catch (error) {
       setMonitorError(error instanceof Error ? error.message : 'Unable to load monitor snapshot.');
       setEngineState('error');
     } finally {
       if (!options?.silent) setIsMonitorLoading(false);
     }
-  }, []);
+  }, [applyMonitorSnapshot, setEngineState, setIsMonitorLoading, setMonitorError]);
 
   const refreshSessionDetail = useCallback(async (sessionId: string, options?: { silent?: boolean }) => {
     if (!sessionId) return;
@@ -370,7 +378,7 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
     } finally {
       if (!options?.silent) setIsSessionDetailLoading(false);
     }
-  }, []);
+  }, [setIsSessionDetailLoading, setSessionDetail, setSessionError]);
 
   const refreshSessionTimeline = useCallback(async (sessionId: string, options?: { silent?: boolean }) => {
     if (!sessionId) return;
@@ -387,16 +395,18 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
     } finally {
       if (!options?.silent) setIsTimelineLoading(false);
     }
-  }, []);
+  }, [setIsTimelineLoading, setSessionTimeline, setTimelineError]);
 
-  const pushDebugEvent = useCallback((event: Omit<OpenCodeDebugEvent, 'id' | 'timestamp'>) => {
-    const timestamp = new Date().toISOString();
-    const id = `${timestamp}-${Math.random().toString(36).slice(2, 8)}`;
-    setEventDebugEvents((current) => {
-      const next = [{ ...event, id, timestamp }, ...current];
-      return next.slice(0, DEBUG_EVENT_LIMIT);
-    });
-  }, []);
+  const pushDebugEvent = useCallback(
+    (
+      event: Omit<ReturnType<typeof createOpenCodeDebugEvent>, 'id' | 'timestamp'>
+    ) => {
+      applyEventUpdate({
+        debugEvent: createOpenCodeDebugEvent(event)
+      });
+    },
+    [applyEventUpdate]
+  );
 
   const scheduleMonitorRefreshFromEvent = useCallback(
     (eventType: string, payload: unknown) => {
@@ -526,21 +536,26 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
 
     const connect = () => {
       if (disposed) return;
-      setEventConnectionState('connecting');
-      setEventConnectionError(null);
+      applyEventUpdate({
+        connectionState: 'connecting',
+        connectionError: null
+      });
 
       source = new EventSource('/api/opencode/events?scope=both&autostart=0');
 
       source.addEventListener('ready', (event) => {
         const payload = parseEventJson(event.data);
-        setEventConnectionState('connected');
-        pushDebugEvent({
-          streamEvent: 'ready',
-          source: 'bridge',
-          seq: null,
-          eventType: 'ready',
-          sessionId: null,
-          payload
+        applyEventUpdate({
+          connectionState: 'connected',
+          connectionError: null,
+          debugEvent: createOpenCodeDebugEvent({
+            streamEvent: 'ready',
+            source: 'bridge',
+            seq: null,
+            eventType: 'ready',
+            sessionId: null,
+            payload
+          })
         });
       });
 
@@ -606,16 +621,17 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
       });
 
       source.onerror = () => {
-        setEventConnectionState('error');
-        setEventConnectionError('Event stream disconnected. Using polling fallback and retrying.');
-
-        pushDebugEvent({
-          streamEvent: 'error',
-          source: 'bridge',
-          seq: null,
-          eventType: 'connection_error',
-          sessionId: null,
-          payload: { message: 'Event stream disconnected.' }
+        applyEventUpdate({
+          connectionState: 'error',
+          connectionError: 'Event stream disconnected. Using polling fallback and retrying.',
+          debugEvent: createOpenCodeDebugEvent({
+            streamEvent: 'error',
+            source: 'bridge',
+            seq: null,
+            eventType: 'connection_error',
+            sessionId: null,
+            payload: { message: 'Event stream disconnected.' }
+          })
         });
 
         source?.close();
@@ -635,7 +651,7 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
       source?.close();
       source = null;
     };
-  }, [pushDebugEvent, scheduleMonitorRefreshFromEvent]);
+  }, [applyEventUpdate, pushDebugEvent, scheduleMonitorRefreshFromEvent]);
 
   useEffect(() => {
     void refreshMonitor();
@@ -659,7 +675,7 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
       void refreshSessionTimeline(activeSessionId, { silent: true });
     }, eventConnectionState === 'connected' ? SESSION_POLL_MS_CONNECTED : SESSION_POLL_MS_DISCONNECTED);
     return () => clearInterval(timer);
-  }, [activeSessionId, eventConnectionState, refreshSessionDetail, refreshSessionTimeline]);
+  }, [activeSessionId, eventConnectionState, refreshSessionDetail, refreshSessionTimeline, setSessionDetail, setSessionTimeline]);
 
   useEffect(() => {
     return () => {
@@ -1372,7 +1388,8 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
     quickPrompt,
     refreshMonitor,
     refreshSessionDetail,
-    refreshSessionTimeline
+    refreshSessionTimeline,
+    setEngineState
   ]);
 
   const handleComposerKeyDown = useCallback(
@@ -1457,7 +1474,7 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
         setIsRuntimeControlBusy(false);
       }
     },
-    [activeSessionId, callControl, isOperationRunning, refreshMonitor, refreshSessionDetail, refreshSessionTimeline]
+    [activeSessionId, callControl, isOperationRunning, refreshMonitor, refreshSessionDetail, refreshSessionTimeline, setEngineState]
   );
 
   const handleFetchProviderAuthMethods = useCallback(async () => {
@@ -2179,7 +2196,7 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
         setIsWorktreeBusy(false);
       }
     },
-    [callControl, refreshMonitor, runtimeControlsLocked]
+    [callControl, refreshMonitor, runtimeControlsLocked, setEngineState]
   );
 
   const refreshWorktreeList = useCallback(async () => {
@@ -2596,7 +2613,7 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
     } finally {
       setIsPtyBusy(false);
     }
-  }, [ptyResizeCols, ptyResizeRows, refreshMonitor, refreshPtyList, runtimeControlsLocked, selectedPtyId]);
+  }, [ptyResizeCols, ptyResizeRows, refreshMonitor, refreshPtyList, runtimeControlsLocked, selectedPtyId, setEngineState]);
 
   const handleCreatePty = useCallback(async () => {
     if (runtimeControlsLocked) {
@@ -2640,7 +2657,7 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
     } finally {
       setIsPtyBusy(false);
     }
-  }, [ptyCreateBody, refreshMonitor, refreshPtyList, runtimeControlsLocked]);
+  }, [ptyCreateBody, refreshMonitor, refreshPtyList, runtimeControlsLocked, setEngineState]);
 
   const handleUpdatePty = useCallback(async () => {
     if (!selectedPtyId.trim()) {
@@ -2681,7 +2698,7 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
     } finally {
       setIsPtyBusy(false);
     }
-  }, [ptyUpdateBody, refreshMonitor, refreshPtyList, runtimeControlsLocked, selectedPtyId]);
+  }, [ptyUpdateBody, refreshMonitor, refreshPtyList, runtimeControlsLocked, selectedPtyId, setEngineState]);
 
   const handleDeletePty = useCallback(async () => {
     if (!selectedPtyId.trim()) {
@@ -2717,7 +2734,7 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
     } finally {
       setIsPtyBusy(false);
     }
-  }, [closePtySocket, refreshMonitor, refreshPtyList, runtimeControlsLocked, selectedPtyId]);
+  }, [closePtySocket, refreshMonitor, refreshPtyList, runtimeControlsLocked, selectedPtyId, setEngineState]);
 
   const refreshConfigEditor = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -2802,7 +2819,8 @@ export default function OpenCodeMonitorShell({ mode = 'dashboard' }: OpenCodeMon
       confirmApplyGlobalConfig,
       confirmApplyLocalConfig,
       refreshConfigEditor,
-      refreshMonitor
+      refreshMonitor,
+      setEngineState
     ]
   );
 

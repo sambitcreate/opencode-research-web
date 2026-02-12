@@ -45,7 +45,7 @@ Last updated: February 12, 2026
   - `assistantMetadata`
 
 ### UI
-- [ ] Introduce centralized monitor store/reducer with event-application model.
+- [x] Introduce centralized monitor store/reducer with event-application model.
 - [x] Prefer SSE updates with polling fallback.
 - [x] Add event debug panel (recent normalized events + filters).
 - [x] Add timeline drawer with per-message actions:
@@ -199,6 +199,11 @@ Last updated: February 12, 2026
 
 ## Done Log
 
+- [x] 2026-02-12: Introduced centralized monitor store/reducer with event-application model:
+  - Added `src/lib/opencode-monitor/store.ts` for reducer-managed monitor/session/event state
+  - Refactored `src/components/opencode-monitor-shell.tsx` to use reducer-backed state transitions
+  - Routed SSE lifecycle updates (connecting/ready/error) and debug event appends through reducer actions
+  - Verified no contract regressions with `npm run lint` and `npm run build -- --webpack`
 - [x] 2026-02-12: Implemented dashboard/settings route split with staged UI relocation:
   - Added shared shell component `src/components/opencode-monitor-shell.tsx` and route wrappers for `/` and `/settings`
   - Added in-app route affordance between Dashboard and Settings views
